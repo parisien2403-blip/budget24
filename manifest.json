@@ -1,0 +1,33 @@
+{
+  "name": "Bouk's Budget",
+  "short_name": "Bouk's",
+  "description": "Suivi de budget mensuel avec solde au 24",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F2F2F7",
+  "theme_color": "#F2F2F7",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Ajouter une dépense",
+      "short_name": "Dépense",
+      "description": "Ouvrir directement le formulaire d'ajout de dépense du jour",
+      "url": "./?action=add-expense",
+      "icons": [{ "src": "shortcut-expense.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Ajouter un revenu",
+      "short_name": "Revenu",
+      "description": "Ouvrir directement le formulaire d'ajout de revenu du jour",
+      "url": "./?action=add-income",
+      "icons": [{ "src": "shortcut-income.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}
