@@ -370,7 +370,7 @@
   .pt-line .pl-mid{flex:1;min-width:0;}
   .pt-line .pl-lib{font-size:14px;color:var(--navy);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .pt-line .pl-sub{font-size:11.5px;color:var(--navy-2);}
-  .pt-line select{width:118px;flex-shrink:0;border:1px solid var(--separator);border-radius:8px;padding:7px 6px;font-size:13px;background:var(--card);color:var(--navy);}
+  .pt-line select{width:150px;flex-shrink:0;border:1px solid var(--separator);border-radius:8px;padding:7px 6px;font-size:13px;background:var(--card);color:var(--navy);}
   .pt-line select.unset{border-color:#F59E0B;}
   .calc-seg{display:flex;gap:8px;margin-bottom:13px;}
   .calc-seg button{flex:1;border-radius:12px;padding:11px 6px;font:inherit;font-size:14px;font-weight:700;color:var(--navy-2);background:var(--card);border:1px solid var(--separator);}
@@ -853,12 +853,13 @@ function txForDay(iso){ return transactions.filter(t=>t.date===iso); }
 // partage : revenus G (moi) | M (conjoint) | A (aide 50/50) ; dépenses F (famille) | G | M | V (virement au conjoint)
 function nomConj(){ return settings.nomConjoint || 'Mélanie'; }
 function partageOf(x){ return x.partage || (x.type==='income' ? 'G' : 'F'); }
-function partageOptions(type){ return type==='income' ? [['G','Moi'],['M',nomConj()],['A','Aide 50/50']] : [['F','Famille'],['G','Moi'],['M',nomConj()],['V','Virement à '+nomConj()]]; }
+function partageOptions(type){ return type==='income' ? [['G','Moi'],['M',nomConj()],['A','Aide 50/50'],['V','Virement de '+nomConj()]] : [['F','Famille'],['G','Moi'],['M',nomConj()],['V','Virement à '+nomConj()]]; }
 function partageSelect(type, val, attrs){ return '<select '+attrs+'>'+partageOptions(type).map(([v,l])=>'<option value="'+v+'" '+(v===val?'selected':'')+'>'+escapeHtml(l)+'</option>').join('')+'</select>'; }
 function partagePeriod(year, month){ // virement le 25 du mois, pour la période du 25 au 24 du mois suivant
   const e = new Date(year, month+1, 24);
   return [fmtISO(year, month, 25), fmtISO(e.getFullYear(), e.getMonth(), 24)];
 }
+function payLabel(c){ return '1er '+MONTHS_ABBR[parseInt(c.payDate.slice(5,7),10)-1]; }
 function partPctFixe(){ const v = Number(settings.partPct); return v>0 && v<100 ? v/100 : null; }
 function computePartage(year, month){
   const [ps, pe] = partagePeriod(year, month);
@@ -873,10 +874,10 @@ function computePartage(year, month){
     lines.push({src:'tx', id:t.id, type:t.type, libelle:t.description||(t.type==='income'?'Revenu':'Dépense'), date:t.date, amount:Number(t.montant)||0, p:partageOf(t), set:!!t.partage});
   });
   lines.sort((a,b)=>a.date.localeCompare(b.date));
-  const c = {ps, pe, lines, RG:0, RM:0, A:0, CG:0, CM:0, CF:0, V:0};
+  const c = {ps, pe, lines, RG:0, RM:0, A:0, CG:0, CM:0, CF:0, V:0, Vin:0};
   lines.forEach(l=>{
     const a = l.amount;
-    if(l.type==='income'){ if(l.p==='M') c.RM+=a; else if(l.p==='A') c.A+=a; else c.RG+=a; }
+    if(l.type==='income'){ if(l.p==='M') c.RM+=a; else if(l.p==='A') c.A+=a; else if(l.p==='V') c.Vin+=a; else c.RG+=a; }
     else { if(l.p==='G') c.CG+=a; else if(l.p==='M') c.CM+=a; else if(l.p==='V') c.V+=a; else c.CF+=a; }
   });
   const tot = c.RG + c.RM + c.A;
@@ -884,9 +885,13 @@ function computePartage(year, month){
   c.du = c.RM + c.A/2 - c.CM - c.pM*c.CF;           // ce qui revient au conjoint
   c.reste = Math.round((c.du - c.V)*100)/100;
   c.nonAttr = lines.filter(l=>!l.set).length;
-  // date du versement : date réelle de mon salaire principal de la période (ex. versé le 15 déc. au lieu du 25)
-  const sal = lines.filter(l=>l.src==='rec' && l.type==='income' && l.p==='G').sort((a,b)=>b.amount-a.amount)[0];
-  c.payDate = sal ? sal.date : ps;
+  // Son salaire arrive sur son compte : elle me rembourse le 1er du mois sa part de la période.
+  // doit = sa part famille + ses charges perso payées sur mon compte − sa moitié des aides
+  //        − ses revenus éventuellement arrivés sur mon compte + mes virements vers elle
+  c.doit = c.pM*c.CF + c.CM - c.A/2 - c.RM + c.V;
+  c.resteDoit = Math.round((c.doit - c.Vin)*100)/100;
+  const pd = new Date(year, month+1, 1);
+  c.payDate = fmtISO(pd.getFullYear(), pd.getMonth(), 1);
   return c;
 }
 /* ---- Calcul rapide d'un achat ---- */
@@ -930,7 +935,7 @@ function renderPartagePdfCard(){
   const sel = (id,val) => '<select id="'+id+'">'+opts.map(([k,y,m])=>'<option value="'+k+'" '+(k===val?'selected':'')+'>'+escapeHtml(partPeriodLabel(y,m))+'</option>').join('')+'</select>';
   return `<div class="pdf-card" style="margin-top:18px;border-left:4px solid #DB2777;">
     <div class="section-head" style="margin-bottom:8px;padding-top:0;"><h2 style="font-size:15px;">Récapitulatif du partage avec ${escapeHtml(nomConj())}</h2></div>
-    <div class="hint" style="margin:0 0 10px;">Revenus, aides, dépenses familiales et charges de chacun, avec le montant versé chaque 25. Choisis une ou plusieurs périodes.</div>
+    <div class="hint" style="margin:0 0 10px;">Dépenses familiales, charges de chacun, aides, et ce que ${escapeHtml(nomConj())} te doit chaque 1er du mois. Choisis une ou plusieurs périodes.</div>
     <div class="field"><label>De la période</label>${sel('part-from', partPdf.from)}</div>
     <div class="field"><label>À la période</label>${sel('part-to', partPdf.to)}</div>
     <button class="pdf-btn" data-action="generate-partage-pdf" style="background:#DB2777;">${icon('download')} Télécharger le PDF du partage</button>
@@ -963,30 +968,32 @@ function generatePartagePdf(){
     doc.setFont('helvetica','normal'); doc.setFontSize(10.5); doc.setTextColor(110,110,115);
     doc.text(nG+' & '+nM+' — du '+partPeriodLabel(fy,fm).split(' au ')[0]+' au '+partPeriodLabel(ty,tm).split(' au ')[1], pageW/2, y, {align:'center'}); y += 5;
     const fixe = partPctFixe();
-    doc.text('Part de '+nM+' dans les charges familiales : '+(fixe!=null ? pctTxt(fixe) : 'selon les revenus de chacun')+' · aides partagées 50/50', pageW/2, y, {align:'center'}); y += 6;
+    doc.text('Part de '+nM+' dans les charges familiales : '+(fixe!=null ? pctTxt(fixe) : 'selon les revenus de chacun')+' · aides partagées 50/50 · remboursement le 1er du mois', pageW/2, y, {align:'center'}); y += 6;
     doc.setDrawColor(220); doc.setLineWidth(0.4); doc.line(14,y,196,y); y += 9;
 
     /* Synthèse par période */
     doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.setTextColor(28,28,30);
     doc.text('Synthèse par période', 14, y); y += 8;
-    const cols = [['PERIODE',16],['REV. '+nG.toUpperCase().slice(0,8),74,'right'],['REV. '+nM.toUpperCase().slice(0,8),95,'right'],['AIDES',113,'right'],['FAMILLE',134,'right'],['PERSO '+nG.toUpperCase().slice(0,1)+'.',152,'right'],['PERSO '+nM.toUpperCase().slice(0,1)+'.',170,'right'],['A VERSER',194,'right']];
+    const n3 = nM.toUpperCase().slice(0,3)+'.';
+    const cols = [['PERIODE',16],['FAMILLE',78,'right'],['PART '+n3+' FAM.',104,'right'],['PERSO '+n3,126,'right'],['AIDES (1/2)',148,'right'],['DEJA RECU',170,'right'],['ELLE DOIT',194,'right']];
     head(cols);
-    const T = {RG:0,RM:0,A:0,CF:0,CG:0,CM:0,du:0,V:0};
+    const T = {CF:0,fam:0,CM:0,A2:0,Vin:0,doit:0};
     periods.forEach((p,i)=>{
       need(7); if(y===20) head(cols);
-      const c = p.c; Object.keys(T).forEach(k=>T[k]+=c[k]);
+      const c = p.c; const fam = c.pM*c.CF;
+      T.CF+=c.CF; T.fam+=fam; T.CM+=c.CM; T.A2+=c.A/2; T.Vin+=c.Vin; T.doit+=c.resteDoit;
       if(i%2===1){ doc.setFillColor(247,247,250); doc.rect(14,y-4.2,182,6,'F'); }
       doc.setTextColor(60,60,65);
       doc.text(formatDateFr(c.ps)+' - '+formatDateFr(c.pe)+' '+c.pe.slice(2,4), 16, y);
-      [[c.RG,74],[c.RM,95],[c.A,113],[c.CF,134],[c.CG,152],[c.CM,170]].forEach(([v,x])=>doc.text(M(v),x,y,{align:'right'}));
-      doc.setTextColor(219,39,119); doc.setFont('helvetica','bold'); doc.text(M(c.du),194,y,{align:'right'}); doc.setFont('helvetica','normal');
+      [[c.CF,78],[fam,104],[c.CM,126],[-c.A/2,148],[c.Vin,170]].forEach(([v,x])=>doc.text(M(v),x,y,{align:'right'}));
+      doc.setTextColor(219,39,119); doc.setFont('helvetica','bold'); doc.text(M(c.resteDoit),194,y,{align:'right'}); doc.setFont('helvetica','normal');
       y += 6;
     });
     if(periods.length>1){
       doc.setDrawColor(28,28,30); doc.line(14,y-3.5,196,y-3.5); y += 1.5;
       doc.setFont('helvetica','bold'); doc.setTextColor(28,28,30); doc.text('TOTAL',16,y);
-      [[T.RG,74],[T.RM,95],[T.A,113],[T.CF,134],[T.CG,152],[T.CM,170]].forEach(([v,x])=>doc.text(M(v),x,y,{align:'right'}));
-      doc.setTextColor(219,39,119); doc.text(M(T.du),194,y,{align:'right'}); doc.setFont('helvetica','normal'); y += 6;
+      [[T.CF,78],[T.fam,104],[T.CM,126],[-T.A2,148],[T.Vin,170]].forEach(([v,x])=>doc.text(M(v),x,y,{align:'right'}));
+      doc.setTextColor(219,39,119); doc.text(M(T.doit),194,y,{align:'right'}); doc.setFont('helvetica','normal'); y += 6;
     }
     y += 6;
 
@@ -995,34 +1002,32 @@ function generatePartagePdf(){
       const c = p.c;
       need(70);
       doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.setTextColor(28,28,30);
-      doc.text('Période du '+partPeriodLabel(p.y,p.m)+' — versement du '+formatDateFr(c.payDate), 14, y); y += 7;
-      // tableau de calcul
-      const rows = [
-        ['Revenus', c.RG, c.RM],
-        ['Aides (moitié chacun)', c.A/2, c.A/2],
-        ['Charges perso', -c.CG, -c.CM],
-        ['Charges familiales ('+pctTxt(1-c.pM)+' / '+pctTxt(c.pM)+' de '+M(c.CF)+')', -(1-c.pM)*c.CF, -c.pM*c.CF],
-        ['Reste à vivre', c.RG+c.A/2-c.CG-(1-c.pM)*c.CF, c.du]
-      ];
-      head([['',16],[nG.toUpperCase(),150,'right'],[nM.toUpperCase(),194,'right']]);
+      doc.text('Période du '+partPeriodLabel(p.y,p.m)+' — à régler le '+payLabel(c), 14, y); y += 7;
+      const rows = [['Sa part des charges familiales ('+pctTxt(c.pM)+' de '+M(c.CF)+')', c.pM*c.CF],
+        ['Ses charges perso payées sur le compte de '+nG, c.CM],
+        ['Moins sa moitié des aides ('+M(c.A)+')', -c.A/2]];
+      if(c.RM>0) rows.push(['Moins ses revenus arrivés sur le compte de '+nG, -c.RM]);
+      if(c.V>0) rows.push(['Plus les virements de '+nG+' vers elle', c.V]);
+      rows.push(['Total dû par '+nM, c.doit]);
+      if(c.Vin>0) rows.push(['Déjà reçu de '+nM, -c.Vin]);
+      head([['CALCUL',16],['MONTANT',194,'right']]);
       rows.forEach((r,i)=>{
-        const last = i===rows.length-1;
-        if(last){ doc.setFont('helvetica','bold'); doc.setDrawColor(200); doc.line(14,y-4,196,y-4); }
-        doc.setTextColor(60,60,65); doc.text(r[0],16,y);
-        doc.text(M(r[1]),150,y,{align:'right'}); doc.text(M(r[2]),194,y,{align:'right'});
+        const tot = r[0].startsWith('Total');
+        if(tot){ doc.setFont('helvetica','bold'); doc.setDrawColor(200); doc.line(14,y-4,196,y-4); }
+        doc.setTextColor(60,60,65); doc.text(r[0],16,y); doc.text(M(r[1]),194,y,{align:'right'});
         doc.setFont('helvetica','normal'); y += 6;
       });
       doc.setFont('helvetica','bold'); doc.setTextColor(219,39,119);
-      doc.text('À verser à '+nM+' le '+formatDateFr(c.payDate)+(c.V>0?' (déjà viré '+M(c.V)+', reste '+M(c.reste)+')':''),16,y);
-      doc.text(M(c.du),194,y,{align:'right'}); doc.setFont('helvetica','normal'); y += 9;
-      // lignes par groupe
+      doc.text((c.resteDoit>=0 ? nM+' doit à '+nG+' le ' : nG+' doit à '+nM+' le ')+payLabel(c),16,y);
+      doc.text(M(Math.abs(c.resteDoit)),194,y,{align:'right'}); doc.setFont('helvetica','normal'); y += 9;
       const groups = [
         ['Dépenses familiales', c.lines.filter(l=>l.type!=='income' && l.p==='F')],
-        ['Charges perso '+nG, c.lines.filter(l=>l.type!=='income' && l.p==='G')],
         ['Charges perso '+nM, c.lines.filter(l=>l.type!=='income' && l.p==='M')],
-        ['Revenus '+nG, c.lines.filter(l=>l.type==='income' && l.p==='G')],
-        ['Revenus '+nM, c.lines.filter(l=>l.type==='income' && l.p==='M')],
+        ['Charges perso '+nG, c.lines.filter(l=>l.type!=='income' && l.p==='G')],
         ['Aides (partagées 50/50)', c.lines.filter(l=>l.type==='income' && l.p==='A')],
+        ['Revenus '+nM+' sur le compte de '+nG, c.lines.filter(l=>l.type==='income' && l.p==='M')],
+        ['Revenus '+nG, c.lines.filter(l=>l.type==='income' && l.p==='G')],
+        ['Virements de '+nM, c.lines.filter(l=>l.type==='income' && l.p==='V')],
         ['Virements à '+nM, c.lines.filter(l=>l.type!=='income' && l.p==='V')]
       ];
       groups.forEach(([title, L])=>{
@@ -1062,55 +1067,61 @@ function generatePartagePdf(){
 
 function renderPartageCard(year, month){
   const c = computePartage(year, month); const n = escapeHtml(nomConj());
-  const label = Math.abs(c.reste)<0.01 && c.V>0 ? 'Tout est versé à '+n : 'À verser à '+n+' le '+formatDateFr(c.payDate);
+  const r = c.resteDoit;
+  const label = Math.abs(r)<0.01 && c.Vin>0 ? n+' a tout réglé' : (r>=0 ? n+' te doit le '+payLabel(c) : 'Tu dois à '+n+' le '+payLabel(c));
   return `<button class="partage-card" data-action="open-partage">
     <div class="pc-top"><span>${label}</span><span>${formatDateFr(c.ps)} → ${formatDateFr(c.pe)}</span></div>
-    <div class="pc-amt">${fmtMoney(c.reste,true)}</div>
-    <div class="pc-sub">${c.V>0?`Total ${fmtMoney(c.du,true)} · Déjà viré ${fmtMoney(c.V,true)}`:`Pour la période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)}`}${c.nonAttr?` · <span class="pc-warn">${c.nonAttr} ligne${c.nonAttr>1?'s':''} à attribuer</span>`:''}</div>
-    ${c.reste<0?`<div class="pc-sub pc-warn" style="margin-top:4px;">Montant négatif : vérifie que le salaire de ${n} est bien attribué à « ${n} ».</div>`:''}
+    <div class="pc-amt">${fmtMoney(Math.abs(r),true)}</div>
+    <div class="pc-sub">${c.Vin>0?`Total ${fmtMoney(c.doit,true)} · Déjà reçu ${fmtMoney(c.Vin,true)}`:`Pour la période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)}`}${c.nonAttr?` · <span class="pc-warn">${c.nonAttr} ligne${c.nonAttr>1?'s':''} à attribuer</span>`:''}</div>
   </button>`;
 }
 function renderPartageModal(){
   const c = computePartage(selectedYear, selectedMonth); const n = escapeHtml(nomConj());
   const pct = v => (Math.round(v*1000)/10).toLocaleString('fr-FR')+' %';
-  const neg = v => Math.abs(v)<0.005 ? fmtMoney(0,true) : '–'+fmtMoney(v,true);
+  const sg = v => Math.abs(v)<0.005 ? fmtMoney(0,true) : (v<0?'–':'+')+fmtMoney(Math.abs(v),true);
   const line = l => `<div class="pt-line">
       <div class="pl-mid"><div class="pl-lib">${escapeHtml(l.libelle)}</div><div class="pl-sub">${formatDateFr(l.date)} · ${l.type==='income'?'+':'–'} ${fmtMoney(l.amount,true)}${l.src==='rec'?(l.fin?' · jusqu\'au '+formatDateFull(l.fin):' · récurrent'):''}</div></div>
       ${partageSelect(l.type, l.p, 'class="partage-select'+(l.set?'':' unset')+'" data-src="'+l.src+'" data-id="'+l.id+'"')}
     </div>`;
   const inc = c.lines.filter(l=>l.type==='income'), exp = c.lines.filter(l=>l.type!=='income');
+  const r = c.resteDoit;
   return `<div class="overlay">
     <div class="sheet">
       <div class="sheet-head">
-        <div><h3>Partage avec ${n}</h3><div class="hint" style="margin:2px 0 0;">Versement du ${formatDateFr(c.payDate)} · période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${c.pe.slice(0,4)}</div></div>
+        <div><h3>Partage avec ${n}</h3><div class="hint" style="margin:2px 0 0;">À régler le ${payLabel(c)} · période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${c.pe.slice(0,4)}</div></div>
         <button class="sheet-close" data-action="close-modal">${icon('x')}</button>
       </div>
       <table class="pt-table">
-        <tr><th></th><th>Moi</th><th>${n}</th></tr>
-        <tr><td>Revenus</td><td>${fmtMoney(c.RG,true)}</td><td>${fmtMoney(c.RM,true)}</td></tr>
-        <tr><td>Aides (½)</td><td>${fmtMoney(c.A/2,true)}</td><td>${fmtMoney(c.A/2,true)}</td></tr>
-        <tr><td>Charges perso</td><td>${neg(c.CG)}</td><td>${neg(c.CM)}</td></tr>
-        <tr><td>Famille (${pct(1-c.pM)} / ${pct(c.pM)})</td><td>${neg((1-c.pM)*c.CF)}</td><td>${neg(c.pM*c.CF)}</td></tr>
-        <tr class="tot"><td>Reste à vivre</td><td>${fmtMoney(c.RG+c.A/2-c.CG-(1-c.pM)*c.CF,true)}</td><td>${fmtMoney(c.du,true)}</td></tr>
-        <tr><td>Déjà viré à ${n}</td><td></td><td>${fmtMoney(c.V,true)}</td></tr>
-        <tr class="du"><td>À verser à ${n}</td><td></td><td>${fmtMoney(c.reste,true)}</td></tr>
+        <tr><td>Sa part des charges familiales (${pct(c.pM)} de ${fmtMoney(c.CF,true)})</td><td>${sg(c.pM*c.CF)}</td></tr>
+        <tr><td>Ses charges perso payées sur ton compte</td><td>${sg(c.CM)}</td></tr>
+        <tr><td>Moins sa moitié des aides (${fmtMoney(c.A,true)})</td><td>${sg(-c.A/2)}</td></tr>
+        ${c.RM>0?`<tr><td>Moins ses revenus arrivés sur ton compte</td><td>${sg(-c.RM)}</td></tr>`:''}
+        ${c.V>0?`<tr><td>Plus tes virements vers elle</td><td>${sg(c.V)}</td></tr>`:''}
+        <tr class="tot"><td>Total dû par ${n}</td><td>${fmtMoney(c.doit,true)}</td></tr>
+        ${c.Vin>0?`<tr><td>Déjà reçu de ${n}</td><td>${sg(-c.Vin)}</td></tr>`:''}
+        <tr class="du"><td>${r>=0?n+' te doit le '+payLabel(c):'Tu dois à '+n}</td><td>${fmtMoney(Math.abs(r),true)}</td></tr>
       </table>
-      <button class="save-btn" data-action="share-partage" style="margin-bottom:14px;">Partager le récap à ${n}</button>
-      <div class="hint" style="margin:0 0 6px;">Choisis à qui correspond chaque ligne. Pour un élément récurrent, le choix vaut pour tous les mois. Lignes en orange = pas encore attribuées (comptées « Famille » pour une dépense, « Moi » pour un revenu). Note tes virements à ${n} en dépense « Virement à ${n} ».</div>
+      <button class="save-btn" data-action="share-partage" style="margin-bottom:14px;">Envoyer le récap à ${n}</button>
+      <div class="hint" style="margin:0 0 6px;">Son salaire arrive sur son compte : il n'a pas à être dans Budget24. Quand elle te rembourse, note-le en revenu « Virement de ${n} ». Choisis à qui correspond chaque ligne (pour un récurrent, le choix vaut pour tous les mois). En orange = pas encore attribuée (comptée « Famille » pour une dépense, « Moi » pour un revenu).</div>
       ${inc.length?'<div class="divider-label">Revenus</div>'+inc.map(line).join(''):''}
       ${exp.length?'<div class="divider-label">Dépenses</div>'+exp.map(line).join(''):''}
-      <div class="field" style="margin-top:16px;"><label>Part de ${n} dans les charges familiales (%)</label><input type="text" inputmode="decimal" id="partage-pct" placeholder="Auto : ${pct((c.RM+c.A/2)/((c.RG+c.RM+c.A)||1))}" value="${partPctFixe()!=null?settings.partPct:''}"></div>
-      <div class="hint" style="margin:-6px 0 12px;">Laisse vide pour un calcul automatique selon les revenus de chacun (aides comptées pour moitié).</div>
+      <div class="field" style="margin-top:16px;"><label>Part de ${n} dans les charges familiales (%)</label><input type="text" inputmode="decimal" id="partage-pct" placeholder="ex. 27,3" value="${partPctFixe()!=null?settings.partPct:''}"></div>
       <div class="field"><label>Prénom de ton épouse</label><input type="text" id="partage-nom" value="${n}"></div>
     </div>
   </div>`;
 }
 function partageRecapText(){
-  const c = computePartage(selectedYear, selectedMonth), n = nomConj();
-  const L = [`Versement du ${formatDateFr(c.payDate)} — période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${c.pe.slice(0,4)}`, '',
-    `Revenus ${n} : ${fmtMoney(c.RM,true)}`, `Aides (moitié) : ${fmtMoney(c.A/2,true)}`, `Charges perso ${n} : –${fmtMoney(c.CM,true)}`,
-    `Charges famille (${(Math.round(c.pM*1000)/10).toLocaleString('fr-FR')} % de ${fmtMoney(c.CF,true)}) : –${fmtMoney(c.pM*c.CF,true)}`,
-    `= Total : ${fmtMoney(c.du,true)}`].concat(c.V>0 ? [`Déjà viré : ${fmtMoney(c.V,true)}`] : [], [`À te verser le ${formatDateFr(c.payDate)} : ${fmtMoney(c.reste,true)}`]);
+  const c = computePartage(selectedYear, selectedMonth);
+  const pc = (Math.round(c.pM*1000)/10).toLocaleString('fr-FR');
+  const L = [`Période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${c.pe.slice(0,4)}`, '',
+    `Ta part des charges familiales (${pc} % de ${fmtMoney(c.CF,true)}) : ${fmtMoney(c.pM*c.CF,true)}`,
+    `Tes charges perso payées sur mon compte : ${fmtMoney(c.CM,true)}`,
+    `Moins ta moitié des aides : –${fmtMoney(c.A/2,true)}`];
+  if(c.RM>0) L.push(`Moins tes revenus arrivés sur mon compte : –${fmtMoney(c.RM,true)}`);
+  if(c.V>0) L.push(`Plus mes virements vers toi : ${fmtMoney(c.V,true)}`);
+  L.push(`= Total : ${fmtMoney(c.doit,true)}`);
+  if(c.Vin>0) L.push(`Déjà reçu : ${fmtMoney(c.Vin,true)}`);
+  L.push(c.resteDoit>=0 ? `À me verser le ${payLabel(c)} : ${fmtMoney(c.resteDoit,true)}` : `Je te dois : ${fmtMoney(-c.resteDoit,true)}`);
   return L.join('\n');
 }
 function recurringOccurrencesForDay(iso){
