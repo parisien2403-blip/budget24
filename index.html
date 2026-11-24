@@ -808,7 +808,8 @@ function getRecurringOccurrences(maxYear){
 function getAllEvents(maxYear){
   const txEvents = transactions.map(t=>({date:t.date, amount: t.type==='income'? Number(t.montant) : -Number(t.montant)}));
   const recEvents = getRecurringOccurrences(maxYear).map(o=>({date:o.date, amount: o.type==='income'? o.amount : -o.amount}));
-  return txEvents.concat(recEvents);
+  const rembEv = rembEvents(maxYear).map(e=>({date:e.date, amount:e.amount}));
+  return txEvents.concat(recEvents, rembEv);
 }
 function computeBalanceAt(uptoISO){
   const upToDate = new Date(uptoISO+'T00:00:00');
@@ -861,6 +862,21 @@ function partagePeriod(year, month){ // virement le 25 du mois, pour la période
 }
 function salConj(){ const x = settings.salConj || {}; return {jour: x.jour || '', paliers: Array.isArray(x.paliers) ? x.paliers : []}; }
 function salConjAt(iso){ let a = 0, best = ''; salConj().paliers.forEach(p=>{ if(p.dateDebut && p.dateDebut<=iso && p.dateDebut>=best){ best = p.dateDebut; a = Number(p.montant)||0; } }); return a; }
+/* Remboursement prévu de l'épouse, ajouté en entrée d'argent le 1er de chaque mois */
+let _rembCache = null;
+function rembStart(){ return settings.rembDebut === undefined ? '2026-12-01' : (settings.rembDebut || null); }
+function rembEvents(maxYear){
+  const st = rembStart(); if(!st) return [];
+  if(_rembCache && _rembCache.maxYear>=maxYear) return _rembCache.list;
+  const list = [];
+  let py = +st.slice(0,4), pm = +st.slice(5,7)-2; if(pm<0){ pm+=12; py--; }   // période qui se règle le 1er du mois de début
+  while(py<=maxYear && list.length<600){
+    const c = computePartage(py, pm);
+    if(c.payDate>=st && c.resteDoit>0.005) list.push({date:c.payDate, amount:c.resteDoit, ps:c.ps, pe:c.pe});
+    pm++; if(pm>11){ pm=0; py++; }
+  }
+  _rembCache = {maxYear, list}; return list;
+}
 function payLabel(c){ return '1er '+MONTHS_ABBR[parseInt(c.payDate.slice(5,7),10)-1]; }
 function partPctFixe(){ const v = Number(settings.partPct); return v>0 && v<100 ? v/100 : null; }
 function computePartage(year, month){
@@ -938,6 +954,8 @@ function renderCalcView(){
     <button class="link-btn" style="text-align:left;color:var(--navy);padding:4px 0 10px;" data-action="sal-add">+ Ajouter un changement de salaire</button>
     <div class="field"><label>Jour de versement</label><input type="text" inputmode="numeric" id="sal-jour" placeholder="ex. 28" value="${escapeHtml(String(sc.jour||''))}"></div>
     <div class="field"><label>Part de ${n} dans les charges familiales (%)</label><input type="text" inputmode="decimal" id="sal-pct" placeholder="vide = calcul selon les salaires" value="${partPctFixe()!=null?settings.partPct:''}"></div>
+    <div class="field"><label>Mettre son remboursement en entrée d'argent le 1er, à partir du</label><input type="date" id="remb-debut" value="${rembStart()||''}"></div>
+    <div class="hint" style="margin:-6px 0 12px;">Vide = désactivé. Quand elle te paye, note son virement en revenu « Virement de ${n} » : la ligne prévue s'ajuste toute seule.</div>
     <button class="save-btn" data-action="sal-save">Enregistrer</button>
   </div>
   <div class="section-head"><h2>Partage d'un achat</h2></div>
@@ -1258,6 +1276,7 @@ function render(){
     return;
   }
 
+  _rembCache = null;
   const prevMain = app.querySelector('main');
   const prevScroll = prevMain ? prevMain.scrollTop : 0;
 
@@ -1473,7 +1492,7 @@ function renderCalendar(){
     const dayRec = recurringOccurrencesForDay(iso);
     const hasIncomeOne = dayTx.some(t=>t.type==='income');
     const hasExpenseOne = dayTx.some(t=>t.type==='expense');
-    const hasIncomeRec = dayRec.some(o=>o.type==='income');
+    const hasIncomeRec = dayRec.some(o=>o.type==='income') || rembEvents(selectedYear+1).some(e=>e.date===iso);
     const hasExpenseRec = dayRec.some(o=>o.type==='expense');
     let classes = 'cal-cell';
     if(iso===todayIso) classes += ' is-today';
@@ -1799,6 +1818,17 @@ function renderDayModal(){
         </div>`;
       });
     }
+    const rembDay = rembEvents(parseInt(iso.slice(0,4),10)+1).filter(e=>e.date===iso);
+    if(rembDay.length){
+      html += '<div class="divider-label">Remboursement prévu</div>';
+      rembDay.forEach(e=>{
+        html += `<div class="tx-row" data-action="open-partage" style="cursor:pointer;">
+          <div class="tx-icon income">${icon('up')}</div>
+          <div class="tx-mid"><div class="tx-desc">Remboursement ${escapeHtml(nomConj())} (prévu)</div><div class="tx-date">Période du ${formatDateFr(e.ps)} au ${formatDateFr(e.pe)}</div></div>
+          <div class="tx-amt amt-pos">+ ${fmtMoney(e.amount,true)}</div>
+        </div>`;
+      });
+    }
     html += '<div class="divider-label">Ponctuel</div>';
     if(ones.length===0){
       html += '<div class="empty-state" style="padding:14px 4px;">Aucune charge ou revenu inopiné ce jour-là.</div>';
@@ -2114,6 +2144,7 @@ document.addEventListener('click', async (e)=>{
     const pv = parseFloat(String(document.getElementById('sal-pct').value).replace(',','.'));
     settings.salConj = {jour: (jour>=1 && jour<=31) ? jour : '', paliers: pals.map(p=>({montant:Number(p.montant), dateDebut:p.dateDebut})).sort((a,b)=>a.dateDebut.localeCompare(b.dateDebut))};
     settings.partPct = (pv>0 && pv<100) ? pv : null;
+    const rd = document.getElementById('remb-debut'); if(rd) settings.rembDebut = rd.value || '';
     await persist(); render(); showToast('Enregistré.');
     return;
   }

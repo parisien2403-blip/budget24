@@ -1,4 +1,4 @@
-const CACHE = 'budget24-v54';
+const CACHE = 'budget24-v55';
 const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './icon-180.png', './shortcut-expense.png', './shortcut-income.png'];
 
 self.addEventListener('install', (event) => {
