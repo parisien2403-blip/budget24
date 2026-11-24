@@ -355,6 +355,23 @@
   .cred-bar-track{height:6px;background:var(--bg);border-radius:4px;overflow:hidden;margin-bottom:6px;box-shadow:inset 0 1px 2px rgba(0,0,0,.08);}
   .cred-bar-fill{height:100%;background:linear-gradient(90deg, #2BD46B, var(--green));border-radius:4px;}
 
+  .partage-card{display:block;width:100%;text-align:left;font:inherit;color:var(--navy);background:var(--card);border:1px solid var(--separator);border-left:4px solid #DB2777;padding:12px 16px;margin:0 0 14px;cursor:pointer;}
+  .partage-card .pc-top{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--navy-2);font-weight:600;}
+  .partage-card .pc-amt{font-size:26px;font-weight:800;color:#DB2777;margin:2px 0;letter-spacing:-.3px;}
+  .partage-card .pc-amt.neg{color:var(--green);}
+  .partage-card .pc-sub{font-size:12px;color:var(--navy-2);}
+  .partage-card .pc-warn{color:#B45309;font-weight:700;}
+  .pt-table{width:100%;border-collapse:collapse;font-size:14px;margin-bottom:14px;}
+  .pt-table td,.pt-table th{padding:7px 2px;text-align:right;border-bottom:1px solid var(--separator);}
+  .pt-table td:first-child,.pt-table th:first-child{text-align:left;color:var(--navy-2);}
+  .pt-table tr.tot td{font-weight:800;color:var(--navy);}
+  .pt-table tr.du td{font-weight:800;color:#DB2777;}
+  .pt-line{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--separator);}
+  .pt-line .pl-mid{flex:1;min-width:0;}
+  .pt-line .pl-lib{font-size:14px;color:var(--navy);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .pt-line .pl-sub{font-size:11.5px;color:var(--navy-2);}
+  .pt-line select{width:118px;flex-shrink:0;border:1px solid var(--separator);border-radius:8px;padding:7px 6px;font-size:13px;background:var(--card);color:var(--navy);}
+  .pt-line select.unset{border-color:#F59E0B;}
   .pdf-card{background:var(--card);border-radius:0;padding:16px 18px;margin-bottom:14px;box-shadow:none;border:1px solid var(--separator);}
   .pdf-row{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--separator);font-size:14px;color:var(--navy);}
   .pdf-row:last-child{border-bottom:none;font-weight:700;padding-top:12px;}
@@ -824,6 +841,93 @@ function fmtMoneyTiny(v){
 }
 
 function txForDay(iso){ return transactions.filter(t=>t.date===iso); }
+
+/* =================== PARTAGE AVEC LE CONJOINT =================== */
+// partage : revenus G (moi) | M (conjoint) | A (aide 50/50) ; dépenses F (famille) | G | M | V (virement au conjoint)
+function nomConj(){ return settings.nomConjoint || 'Mélanie'; }
+function partageOf(x){ return x.partage || (x.type==='income' ? 'G' : 'F'); }
+function partageOptions(type){ return type==='income' ? [['G','Moi'],['M',nomConj()],['A','Aide 50/50']] : [['F','Famille'],['G','Moi'],['M',nomConj()],['V','Virement à '+nomConj()]]; }
+function partageSelect(type, val, attrs){ return '<select '+attrs+'>'+partageOptions(type).map(([v,l])=>'<option value="'+v+'" '+(v===val?'selected':'')+'>'+escapeHtml(l)+'</option>').join('')+'</select>'; }
+function partagePeriod(year, month){ // du 25 du mois précédent au 24 du mois (comme le « solde au 24 »)
+  const s = new Date(year, month-1, 25);
+  return [fmtISO(s.getFullYear(), s.getMonth(), 25), fmtISO(year, month, 24)];
+}
+function computePartage(year, month){
+  const [ps, pe] = partagePeriod(year, month);
+  const lines = [];
+  getRecurringOccurrences(year+1).forEach(o=>{
+    if(o.defaultDate<ps || o.defaultDate>pe) return; // une échéance décalée reste sur son mois d'origine
+    const r = recurring.find(x=>x.id===o.recurringId); if(!r) return;
+    lines.push({src:'rec', id:r.id, type:o.type, libelle:o.libelle, date:o.date, amount:Number(o.amount)||0, p:partageOf(r), set:!!r.partage});
+  });
+  transactions.forEach(t=>{
+    if(t.date<ps || t.date>pe) return;
+    lines.push({src:'tx', id:t.id, type:t.type, libelle:t.description||(t.type==='income'?'Revenu':'Dépense'), date:t.date, amount:Number(t.montant)||0, p:partageOf(t), set:!!t.partage});
+  });
+  lines.sort((a,b)=>a.date.localeCompare(b.date));
+  const c = {ps, pe, lines, RG:0, RM:0, A:0, CG:0, CM:0, CF:0, V:0};
+  lines.forEach(l=>{
+    const a = l.amount;
+    if(l.type==='income'){ if(l.p==='M') c.RM+=a; else if(l.p==='A') c.A+=a; else c.RG+=a; }
+    else { if(l.p==='G') c.CG+=a; else if(l.p==='M') c.CM+=a; else if(l.p==='V') c.V+=a; else c.CF+=a; }
+  });
+  const tot = c.RG + c.RM + c.A;
+  c.pM = tot>0 ? (c.RM + c.A/2) / tot : 0.5;        // prorata sur revenus + aides
+  c.du = c.RM + c.A/2 - c.CM - c.pM*c.CF;           // ce qui revient au conjoint
+  c.reste = Math.round((c.du - c.V)*100)/100;
+  c.nonAttr = lines.filter(l=>!l.set).length;
+  return c;
+}
+function renderPartageCard(year, month){
+  const c = computePartage(year, month); const n = escapeHtml(nomConj());
+  const label = Math.abs(c.reste)<0.01 ? 'Tout est réglé avec '+n : (c.reste>0 ? 'À verser à '+n : n+' doit te reverser');
+  return `<button class="partage-card" data-action="open-partage">
+    <div class="pc-top"><span>${label}</span><span>${formatDateFr(c.ps)} → ${formatDateFr(c.pe)}</span></div>
+    <div class="pc-amt ${c.reste<0?'neg':''}">${fmtMoney(Math.abs(c.reste),true)}</div>
+    <div class="pc-sub">Dû ${fmtMoney(c.du,true)} · Déjà viré ${fmtMoney(c.V,true)}${c.nonAttr?` · <span class="pc-warn">${c.nonAttr} ligne${c.nonAttr>1?'s':''} à attribuer</span>`:''}</div>
+  </button>`;
+}
+function renderPartageModal(){
+  const c = computePartage(selectedYear, selectedMonth); const n = escapeHtml(nomConj());
+  const pct = v => (Math.round(v*1000)/10).toLocaleString('fr-FR')+' %';
+  const neg = v => Math.abs(v)<0.005 ? fmtMoney(0,true) : '–'+fmtMoney(v,true);
+  const line = l => `<div class="pt-line">
+      <div class="pl-mid"><div class="pl-lib">${escapeHtml(l.libelle)}</div><div class="pl-sub">${formatDateFr(l.date)} · ${l.type==='income'?'+':'–'} ${fmtMoney(l.amount,true)}${l.src==='rec'?' · récurrent':''}</div></div>
+      ${partageSelect(l.type, l.p, 'class="partage-select'+(l.set?'':' unset')+'" data-src="'+l.src+'" data-id="'+l.id+'"')}
+    </div>`;
+  const inc = c.lines.filter(l=>l.type==='income'), exp = c.lines.filter(l=>l.type!=='income');
+  return `<div class="overlay">
+    <div class="sheet">
+      <div class="sheet-head">
+        <div><h3>Partage avec ${n}</h3><div class="hint" style="margin:2px 0 0;">Du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${selectedYear}</div></div>
+        <button class="sheet-close" data-action="close-modal">${icon('x')}</button>
+      </div>
+      <table class="pt-table">
+        <tr><th></th><th>Moi</th><th>${n}</th></tr>
+        <tr><td>Revenus</td><td>${fmtMoney(c.RG,true)}</td><td>${fmtMoney(c.RM,true)}</td></tr>
+        <tr><td>Aides (½)</td><td>${fmtMoney(c.A/2,true)}</td><td>${fmtMoney(c.A/2,true)}</td></tr>
+        <tr><td>Charges perso</td><td>${neg(c.CG)}</td><td>${neg(c.CM)}</td></tr>
+        <tr><td>Famille (${pct(1-c.pM)} / ${pct(c.pM)})</td><td>${neg((1-c.pM)*c.CF)}</td><td>${neg(c.pM*c.CF)}</td></tr>
+        <tr class="tot"><td>Reste à vivre</td><td>${fmtMoney(c.RG+c.A/2-c.CG-(1-c.pM)*c.CF,true)}</td><td>${fmtMoney(c.du,true)}</td></tr>
+        <tr><td>Déjà viré à ${n}</td><td></td><td>${fmtMoney(c.V,true)}</td></tr>
+        <tr class="du"><td>${c.reste>=0?'Reste à verser':'À me reverser'}</td><td></td><td>${fmtMoney(Math.abs(c.reste),true)}</td></tr>
+      </table>
+      <button class="save-btn" data-action="share-partage" style="margin-bottom:14px;">Partager le récap à ${n}</button>
+      <div class="hint" style="margin:0 0 6px;">Choisis à qui correspond chaque ligne. Pour un élément récurrent, le choix vaut pour tous les mois. Lignes en orange = pas encore attribuées (comptées « Famille » pour une dépense, « Moi » pour un revenu). Note tes virements à ${n} en dépense « Virement à ${n} ».</div>
+      ${inc.length?'<div class="divider-label">Revenus</div>'+inc.map(line).join(''):''}
+      ${exp.length?'<div class="divider-label">Dépenses</div>'+exp.map(line).join(''):''}
+      <div class="field" style="margin-top:16px;"><label>Prénom de ton épouse</label><input type="text" id="partage-nom" value="${n}"></div>
+    </div>
+  </div>`;
+}
+function partageRecapText(){
+  const c = computePartage(selectedYear, selectedMonth), n = nomConj();
+  const L = [`Partage du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${selectedYear}`, '',
+    `Revenus ${n} : ${fmtMoney(c.RM,true)}`, `Aides (moitié) : ${fmtMoney(c.A/2,true)}`, `Charges perso ${n} : –${fmtMoney(c.CM,true)}`,
+    `Charges famille (${(Math.round(c.pM*1000)/10).toLocaleString('fr-FR')} % de ${fmtMoney(c.CF,true)}) : –${fmtMoney(c.pM*c.CF,true)}`,
+    `= Dû : ${fmtMoney(c.du,true)}`, `Déjà viré : ${fmtMoney(c.V,true)}`, c.reste>=0 ? `Reste à verser : ${fmtMoney(c.reste,true)}` : `À me reverser : ${fmtMoney(-c.reste,true)}`];
+  return L.join('\n');
+}
 function recurringOccurrencesForDay(iso){
   const y = parseInt(iso.slice(0,4),10);
   return getRecurringOccurrences(y).filter(o=>o.date===iso);
@@ -1134,6 +1238,7 @@ function renderCalendar(){
   </div>`;
   if(isCurrentMonth) html += renderDailyBudgetCard();
 
+  html += renderPartageCard(selectedYear, selectedMonth);
   html += '<div class="weekdays">'+WEEKDAYS.map(w=>'<div>'+w+'</div>').join('')+'</div>';
   html += '<div class="cal-grid">';
   for(let i=0;i<firstDow;i++) html += '<div class="cal-cell empty"></div>';
@@ -1330,6 +1435,7 @@ function renderModal(){
   if(modal.kind==='settings') return renderSettingsModal();
   if(modal.kind==='day') return renderDayModal();
   if(modal.kind==='recurring') return renderRecurringModal();
+  if(modal.kind==='partage') return renderPartageModal();
   if(modal.kind==='occurrence') return renderOccurrenceModal();
   if(modal.kind==='pin-setup') return renderPinSetupModal();
   if(modal.kind==='category') return renderCategoryModal();
@@ -1509,6 +1615,7 @@ function renderDayModal(){
           ${allCategoryNames().map(c=>'<option value="'+c+'" '+((editing&&editing.categorie?editing.categorie:'Autre')===c?'selected':'')+'>'+categoryEmoji(c)+' '+c+'</option>').join('')}
         </select>
       </div>
+      <div class="field"><label>À qui ?</label>${partageSelect(curType, (editing&&editing.partage) || (curType==='income'?'G':'F'), 'id="tx-partage"')}</div>
       <div class="field"><label>Date</label><input type="date" id="tx-date" value="${editing?editing.date:iso}"></div>
       <button class="save-btn" data-action="save-day-tx">${editing?'Mettre à jour':'Ajouter'}</button>
       ${editing ? '<button class="delete-link" data-action="delete-tx" data-id="'+editing.id+'">'+icon('trash')+' Supprimer</button>' : ''}
@@ -1592,6 +1699,7 @@ function renderRecurringModal(){
       ${(!isIncome && !isCreancier) ? `<div class="field"><label>Catégorie</label><select id="rec-categorie">
           ${allCategoryNames().map(c=>'<option value="'+c+'" '+((editing&&editing.categorie?editing.categorie:'Autre')===c?'selected':'')+'>'+categoryEmoji(c)+' '+c+'</option>').join('')}
         </select></div>` : ''}
+      <div class="field"><label>À qui correspond ${isIncome?'ce revenu':'cette dépense'} ?</label>${partageSelect(type, modal.partage || (editing&&editing.partage) || (isIncome?'G':'F'), 'id="rec-partage"')}</div>
       <div class="field"><label>Date de début</label><input type="date" id="rec-debut" value="${isCreancier?(debutVal||todayISO()):(editing?editing.dateDebut:todayISO())}"></div>
       <div class="hint" style="margin:-6px 0 12px;">${(isWeekly&&!isCreancier)?'':"Le jour du mois est déterminé automatiquement à partir de la date de début."}</div>
       <div class="noend-row">
@@ -1701,6 +1809,24 @@ document.addEventListener('change', (e)=>{
     if(file) importDataFromFile(file);
     e.target.value = '';
   }
+  if(e.target.classList.contains('partage-select')){
+    const coll = e.target.dataset.src==='rec' ? recurring : transactions;
+    const x = coll.find(z=>z.id===e.target.dataset.id);
+    if(x){
+      x.partage = e.target.value; persist();
+      const sh = document.querySelector('.sheet'); const st = sh ? sh.scrollTop : 0;
+      render();
+      const sh2 = document.querySelector('.sheet'); if(sh2) sh2.scrollTop = st;
+    }
+    return;
+  }
+  if(e.target.id==='rec-partage' && modal){ modal.partage = e.target.value; }
+  if(e.target.id==='partage-nom'){
+    settings.nomConjoint = e.target.value.trim() || 'Mélanie'; persist();
+    const sh = document.querySelector('.sheet'); const st = sh ? sh.scrollTop : 0;
+    render(); const sh2 = document.querySelector('.sheet'); if(sh2) sh2.scrollTop = st;
+    return;
+  }
   if(e.target.classList.contains('row-check')){
     const key = e.target.dataset.key;
     if(e.target.checked) daySelection.add(key); else daySelection.delete(key);
@@ -1733,6 +1859,13 @@ document.addEventListener('click', async (e)=>{
   if(action==='pdf-next'){ pdfMonth++; if(pdfMonth>11){pdfMonth=0;pdfYear++;} resetScrollNext=true; render(); return; }
 
   if(action==='open-settings'){ modal={kind:'settings'}; render(); return; }
+  if(action==='open-partage'){ modal={kind:'partage'}; render(); return; }
+  if(action==='share-partage'){
+    const txt = partageRecapText();
+    try{ if(navigator.share){ await navigator.share({title:'Partage', text:txt}); return; } }catch(err){ if(err && err.name==='AbortError') return; }
+    try{ await navigator.clipboard.writeText(txt); showToast('Récap copié.'); }catch(err){ showToast('Copie impossible.'); }
+    return;
+  }
   if(action==='toggle-dark'){ settings.darkMode = !settings.darkMode; persist(); render(); return; }
   if(action==='set-balance-color'){
     settings.balanceColor = parseInt(btn.dataset.index,10);
@@ -1764,6 +1897,8 @@ document.addEventListener('click', async (e)=>{
     document.querySelectorAll('.type-pill').forEach(p=>p.classList.toggle('active', p.dataset.type===modalTypeState));
     const catField = document.getElementById('tx-cat-field');
     if(catField) catField.style.display = modalTypeState==='expense' ? 'block' : 'none';
+    const pSel = document.getElementById('tx-partage');
+    if(pSel) pSel.outerHTML = partageSelect(modalTypeState, modalTypeState==='income'?'G':'F', 'id="tx-partage"');
     return;
   }
   if(action==='save-day-tx'){
@@ -1773,11 +1908,13 @@ document.addEventListener('click', async (e)=>{
     const description = document.getElementById('tx-desc').value.trim();
     const catEl = document.getElementById('tx-categorie');
     const categorie = (modalTypeState==='expense' && catEl) ? catEl.value : null;
+    const ptEl = document.getElementById('tx-partage');
+    const partage = ptEl ? ptEl.value : null;
     if(modal.editingTxId){
       const t = transactions.find(x=>x.id===modal.editingTxId);
-      t.montant=montant; t.description=description; t.date=date; t.type=modalTypeState; t.categorie=categorie;
+      t.montant=montant; t.description=description; t.date=date; t.type=modalTypeState; t.categorie=categorie; t.partage=partage;
     } else {
-      transactions.push({id:uid(), date, type:modalTypeState, montant, description, categorie});
+      transactions.push({id:uid(), date, type:modalTypeState, montant, description, categorie, partage});
     }
     await persist();
     modal.formOpen=false; modal.editingTxId=null;
@@ -1857,11 +1994,13 @@ document.addEventListener('click', async (e)=>{
       if(!montant || montant<=0){ showToast('Indiquez un montant valide.'); return; }
     }
 
+    const partEl = document.getElementById('rec-partage');
+    const partage = partEl ? partEl.value : null;
     if(modal.editId){
       const r = recurring.find(x=>x.id===modal.editId);
-      Object.assign(r, {libelle, montant, montantDu, frequence, jour, categorie, dateDebut, dateFin, creancier:isCreancier, paliers});
+      Object.assign(r, {libelle, montant, montantDu, frequence, jour, categorie, dateDebut, dateFin, creancier:isCreancier, paliers, partage});
     } else {
-      recurring.push({id:uid(), type:modal.type, libelle, montant, montantDu, frequence, jour, categorie, dateDebut, dateFin, creancier:isCreancier, paliers});
+      recurring.push({id:uid(), type:modal.type, libelle, montant, montantDu, frequence, jour, categorie, dateDebut, dateFin, creancier:isCreancier, paliers, partage});
     }
     await persist();
     modal=null; render();
@@ -1969,7 +2108,7 @@ document.addEventListener('click', async (e)=>{
   if(action==='save-settings'){
     const solde = parseFloat(document.getElementById('set-solde').value)||0;
     const date = document.getElementById('set-date').value || todayISO();
-    settings = {soldeInitial:solde, dateReference:date, pinCode: settings.pinCode||null, darkMode: !!settings.darkMode, balanceColor: settings.balanceColor||0, lastBackupDate: settings.lastBackupDate||null};
+    settings = {...settings, soldeInitial:solde, dateReference:date, pinCode: settings.pinCode||null, darkMode: !!settings.darkMode, balanceColor: settings.balanceColor||0, lastBackupDate: settings.lastBackupDate||null};
     await persist();
     modal=null; render();
     showToast('Réglages enregistrés.');
