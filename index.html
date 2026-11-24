@@ -887,7 +887,7 @@ function computePartage(year, month){
   return c;
 }
 /* ---- Calcul rapide d'un achat ---- */
-let calcState = {amount:'', payer:'G', mode:'pct'};
+let calcState = {amount:'', payer:'G', mode:'half'};
 function calcPctM(){
   const f = partPctFixe(); if(f!=null) return f;
   const t = new Date(); let y = t.getFullYear(), m = t.getMonth();
@@ -897,25 +897,26 @@ function calcPctM(){
 function calcResultHtml(){
   const n = escapeHtml(nomConj());
   const a = parseFloat(String(calcState.amount).replace(/\s/g,'').replace(',','.')) || 0;
-  const pM = calcState.mode==='half' ? 0.5 : calcPctM();
+  const pM = calcState.mode==='M' ? 1 : calcState.mode==='G' ? 0 : 0.5;   // part de l'achat qui revient à l'épouse
   const pctTxt = (Math.round(pM*1000)/10).toLocaleString('fr-FR')+' %';
   const pctG = (Math.round((1-pM)*1000)/10).toLocaleString('fr-FR')+' %';
+  const owe = calcState.payer==='G' ? a*pM : a*(1-pM);
+  if(a>0 && owe<0.005) return `<div class="cr-l">Personne ne doit rien</div><div class="cr-a">${fmtMoney(0,true)}</div><div class="cr-s">${calcState.payer==='G'?'Tu as payé ton propre achat.':'Elle a payé son propre achat.'}</div>`;
   if(calcState.payer==='G') return `<div class="cr-l">${n} te doit</div><div class="cr-a">${fmtMoney(a*pM,true)}</div><div class="cr-s">Sa part : ${pctTxt} de ${fmtMoney(a,true)} · ta part : ${fmtMoney(a*(1-pM),true)}</div>`;
   return `<div class="cr-l">Tu dois à ${n}</div><div class="cr-a">${fmtMoney(a*(1-pM),true)}</div><div class="cr-s">Ta part : ${pctG} de ${fmtMoney(a,true)} · sa part : ${fmtMoney(a*pM,true)}</div>`;
 }
 function renderCalcView(){
   const n = escapeHtml(nomConj());
-  const pctTxt = (Math.round(calcPctM()*1000)/10).toLocaleString('fr-FR');
   return `<div class="section-head"><h2>Partage d'un achat</h2></div>
   <div class="pdf-card">
     <div class="field"><label>Montant de l'achat</label><input type="text" inputmode="decimal" id="calc-amount" placeholder="0,00" value="${escapeHtml(calcState.amount)}"></div>
     <label style="display:block;font-size:12.5px;font-weight:600;color:var(--navy-2);margin-bottom:6px;">Qui a payé ?</label>
     <div class="calc-seg"><button class="${calcState.payer==='G'?'active':''}" data-action="calc-payer" data-v="G">Moi</button><button class="${calcState.payer==='M'?'active':''}" data-action="calc-payer" data-v="M">${n}</button></div>
-    <label style="display:block;font-size:12.5px;font-weight:600;color:var(--navy-2);margin-bottom:6px;">Répartition</label>
-    <div class="calc-seg"><button class="${calcState.mode==='pct'?'active':''}" data-action="calc-mode" data-v="pct">Famille ${pctTxt} %</button><button class="${calcState.mode==='half'?'active':''}" data-action="calc-mode" data-v="half">50 / 50</button></div>
+    <label style="display:block;font-size:12.5px;font-weight:600;color:var(--navy-2);margin-bottom:6px;">C'est pour qui ?</label>
+    <div class="calc-seg"><button class="${calcState.mode==='G'?'active':''}" data-action="calc-mode" data-v="G">Moi</button><button class="${calcState.mode==='M'?'active':''}" data-action="calc-mode" data-v="M">${n}</button><button class="${calcState.mode==='half'?'active':''}" data-action="calc-mode" data-v="half">50 / 50</button></div>
     <div class="calc-res" id="calc-res">${calcResultHtml()}</div>
   </div>
-  <div class="hint">Le pourcentage « Famille » est celui des charges familiales (réglable dans le détail de la carte rose).</div>`;
+`;
 }
 
 function renderPartageCard(year, month){
