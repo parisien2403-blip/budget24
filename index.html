@@ -848,10 +848,11 @@ function nomConj(){ return settings.nomConjoint || 'Mélanie'; }
 function partageOf(x){ return x.partage || (x.type==='income' ? 'G' : 'F'); }
 function partageOptions(type){ return type==='income' ? [['G','Moi'],['M',nomConj()],['A','Aide 50/50']] : [['F','Famille'],['G','Moi'],['M',nomConj()],['V','Virement à '+nomConj()]]; }
 function partageSelect(type, val, attrs){ return '<select '+attrs+'>'+partageOptions(type).map(([v,l])=>'<option value="'+v+'" '+(v===val?'selected':'')+'>'+escapeHtml(l)+'</option>').join('')+'</select>'; }
-function partagePeriod(year, month){ // du 25 du mois précédent au 24 du mois (comme le « solde au 24 »)
-  const s = new Date(year, month-1, 25);
-  return [fmtISO(s.getFullYear(), s.getMonth(), 25), fmtISO(year, month, 24)];
+function partagePeriod(year, month){ // virement le 25 du mois, pour la période du 25 au 24 du mois suivant
+  const e = new Date(year, month+1, 24);
+  return [fmtISO(year, month, 25), fmtISO(e.getFullYear(), e.getMonth(), 24)];
 }
+function partPctFixe(){ const v = Number(settings.partPct); return v>0 && v<100 ? v/100 : null; }
 function computePartage(year, month){
   const [ps, pe] = partagePeriod(year, month);
   const lines = [];
@@ -872,7 +873,7 @@ function computePartage(year, month){
     else { if(l.p==='G') c.CG+=a; else if(l.p==='M') c.CM+=a; else if(l.p==='V') c.V+=a; else c.CF+=a; }
   });
   const tot = c.RG + c.RM + c.A;
-  c.pM = tot>0 ? (c.RM + c.A/2) / tot : 0.5;        // prorata sur revenus + aides
+  c.pM = partPctFixe() ?? (tot>0 ? (c.RM + c.A/2) / tot : 0.5);   // % fixe choisi, sinon prorata revenus + aides
   c.du = c.RM + c.A/2 - c.CM - c.pM*c.CF;           // ce qui revient au conjoint
   c.reste = Math.round((c.du - c.V)*100)/100;
   c.nonAttr = lines.filter(l=>!l.set).length;
@@ -880,7 +881,7 @@ function computePartage(year, month){
 }
 function renderPartageCard(year, month){
   const c = computePartage(year, month); const n = escapeHtml(nomConj());
-  const label = Math.abs(c.reste)<0.01 ? 'Tout est réglé avec '+n : (c.reste>0 ? 'À verser à '+n : n+' doit te reverser');
+  const label = Math.abs(c.reste)<0.01 ? 'Tout est réglé avec '+n : (c.reste>0 ? 'À verser à '+n+' le '+formatDateFr(c.ps) : n+' doit te reverser');
   return `<button class="partage-card" data-action="open-partage">
     <div class="pc-top"><span>${label}</span><span>${formatDateFr(c.ps)} → ${formatDateFr(c.pe)}</span></div>
     <div class="pc-amt ${c.reste<0?'neg':''}">${fmtMoney(Math.abs(c.reste),true)}</div>
@@ -899,7 +900,7 @@ function renderPartageModal(){
   return `<div class="overlay">
     <div class="sheet">
       <div class="sheet-head">
-        <div><h3>Partage avec ${n}</h3><div class="hint" style="margin:2px 0 0;">Du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${selectedYear}</div></div>
+        <div><h3>Partage avec ${n}</h3><div class="hint" style="margin:2px 0 0;">Versement du ${formatDateFr(c.ps)} · période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${c.pe.slice(0,4)}</div></div>
         <button class="sheet-close" data-action="close-modal">${icon('x')}</button>
       </div>
       <table class="pt-table">
@@ -916,13 +917,15 @@ function renderPartageModal(){
       <div class="hint" style="margin:0 0 6px;">Choisis à qui correspond chaque ligne. Pour un élément récurrent, le choix vaut pour tous les mois. Lignes en orange = pas encore attribuées (comptées « Famille » pour une dépense, « Moi » pour un revenu). Note tes virements à ${n} en dépense « Virement à ${n} ».</div>
       ${inc.length?'<div class="divider-label">Revenus</div>'+inc.map(line).join(''):''}
       ${exp.length?'<div class="divider-label">Dépenses</div>'+exp.map(line).join(''):''}
-      <div class="field" style="margin-top:16px;"><label>Prénom de ton épouse</label><input type="text" id="partage-nom" value="${n}"></div>
+      <div class="field" style="margin-top:16px;"><label>Part de ${n} dans les charges familiales (%)</label><input type="text" inputmode="decimal" id="partage-pct" placeholder="Auto : ${pct((c.RM+c.A/2)/((c.RG+c.RM+c.A)||1))}" value="${partPctFixe()!=null?settings.partPct:''}"></div>
+      <div class="hint" style="margin:-6px 0 12px;">Laisse vide pour un calcul automatique selon les revenus de chacun (aides comptées pour moitié).</div>
+      <div class="field"><label>Prénom de ton épouse</label><input type="text" id="partage-nom" value="${n}"></div>
     </div>
   </div>`;
 }
 function partageRecapText(){
   const c = computePartage(selectedYear, selectedMonth), n = nomConj();
-  const L = [`Partage du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${selectedYear}`, '',
+  const L = [`Versement du ${formatDateFr(c.ps)} — période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${c.pe.slice(0,4)}`, '',
     `Revenus ${n} : ${fmtMoney(c.RM,true)}`, `Aides (moitié) : ${fmtMoney(c.A/2,true)}`, `Charges perso ${n} : –${fmtMoney(c.CM,true)}`,
     `Charges famille (${(Math.round(c.pM*1000)/10).toLocaleString('fr-FR')} % de ${fmtMoney(c.CF,true)}) : –${fmtMoney(c.pM*c.CF,true)}`,
     `= Dû : ${fmtMoney(c.du,true)}`, `Déjà viré : ${fmtMoney(c.V,true)}`, c.reste>=0 ? `Reste à verser : ${fmtMoney(c.reste,true)}` : `À me reverser : ${fmtMoney(-c.reste,true)}`];
@@ -1821,6 +1824,13 @@ document.addEventListener('change', (e)=>{
     return;
   }
   if(e.target.id==='rec-partage' && modal){ modal.partage = e.target.value; }
+  if(e.target.id==='partage-pct'){
+    const v = parseFloat(String(e.target.value).replace(',','.'));
+    settings.partPct = (v>0 && v<100) ? v : null; persist();
+    const sh = document.querySelector('.sheet'); const st = sh ? sh.scrollTop : 0;
+    render(); const sh2 = document.querySelector('.sheet'); if(sh2) sh2.scrollTop = st;
+    return;
+  }
   if(e.target.id==='partage-nom'){
     settings.nomConjoint = e.target.value.trim() || 'Mélanie'; persist();
     const sh = document.querySelector('.sheet'); const st = sh ? sh.scrollTop : 0;
