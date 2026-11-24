@@ -881,11 +881,12 @@ function computePartage(year, month){
 }
 function renderPartageCard(year, month){
   const c = computePartage(year, month); const n = escapeHtml(nomConj());
-  const label = Math.abs(c.reste)<0.01 ? 'Tout est réglé avec '+n : (c.reste>0 ? 'À verser à '+n+' le '+formatDateFr(c.ps) : n+' doit te reverser');
+  const label = Math.abs(c.reste)<0.01 && c.V>0 ? 'Tout est versé à '+n : 'À verser à '+n+' le '+formatDateFr(c.ps);
   return `<button class="partage-card" data-action="open-partage">
     <div class="pc-top"><span>${label}</span><span>${formatDateFr(c.ps)} → ${formatDateFr(c.pe)}</span></div>
-    <div class="pc-amt ${c.reste<0?'neg':''}">${fmtMoney(Math.abs(c.reste),true)}</div>
-    <div class="pc-sub">Dû ${fmtMoney(c.du,true)} · Déjà viré ${fmtMoney(c.V,true)}${c.nonAttr?` · <span class="pc-warn">${c.nonAttr} ligne${c.nonAttr>1?'s':''} à attribuer</span>`:''}</div>
+    <div class="pc-amt">${fmtMoney(c.reste,true)}</div>
+    <div class="pc-sub">${c.V>0?`Total ${fmtMoney(c.du,true)} · Déjà viré ${fmtMoney(c.V,true)}`:`Pour la période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)}`}${c.nonAttr?` · <span class="pc-warn">${c.nonAttr} ligne${c.nonAttr>1?'s':''} à attribuer</span>`:''}</div>
+    ${c.reste<0?`<div class="pc-sub pc-warn" style="margin-top:4px;">Montant négatif : vérifie que le salaire de ${n} est bien attribué à « ${n} ».</div>`:''}
   </button>`;
 }
 function renderPartageModal(){
@@ -911,7 +912,7 @@ function renderPartageModal(){
         <tr><td>Famille (${pct(1-c.pM)} / ${pct(c.pM)})</td><td>${neg((1-c.pM)*c.CF)}</td><td>${neg(c.pM*c.CF)}</td></tr>
         <tr class="tot"><td>Reste à vivre</td><td>${fmtMoney(c.RG+c.A/2-c.CG-(1-c.pM)*c.CF,true)}</td><td>${fmtMoney(c.du,true)}</td></tr>
         <tr><td>Déjà viré à ${n}</td><td></td><td>${fmtMoney(c.V,true)}</td></tr>
-        <tr class="du"><td>${c.reste>=0?'Reste à verser':'À me reverser'}</td><td></td><td>${fmtMoney(Math.abs(c.reste),true)}</td></tr>
+        <tr class="du"><td>À verser à ${n}</td><td></td><td>${fmtMoney(c.reste,true)}</td></tr>
       </table>
       <button class="save-btn" data-action="share-partage" style="margin-bottom:14px;">Partager le récap à ${n}</button>
       <div class="hint" style="margin:0 0 6px;">Choisis à qui correspond chaque ligne. Pour un élément récurrent, le choix vaut pour tous les mois. Lignes en orange = pas encore attribuées (comptées « Famille » pour une dépense, « Moi » pour un revenu). Note tes virements à ${n} en dépense « Virement à ${n} ».</div>
@@ -928,7 +929,7 @@ function partageRecapText(){
   const L = [`Versement du ${formatDateFr(c.ps)} — période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${c.pe.slice(0,4)}`, '',
     `Revenus ${n} : ${fmtMoney(c.RM,true)}`, `Aides (moitié) : ${fmtMoney(c.A/2,true)}`, `Charges perso ${n} : –${fmtMoney(c.CM,true)}`,
     `Charges famille (${(Math.round(c.pM*1000)/10).toLocaleString('fr-FR')} % de ${fmtMoney(c.CF,true)}) : –${fmtMoney(c.pM*c.CF,true)}`,
-    `= Dû : ${fmtMoney(c.du,true)}`, `Déjà viré : ${fmtMoney(c.V,true)}`, c.reste>=0 ? `Reste à verser : ${fmtMoney(c.reste,true)}` : `À me reverser : ${fmtMoney(-c.reste,true)}`];
+    `= Total : ${fmtMoney(c.du,true)}`].concat(c.V>0 ? [`Déjà viré : ${fmtMoney(c.V,true)}`] : [], [`À te verser le ${formatDateFr(c.ps)} : ${fmtMoney(c.reste,true)}`]);
   return L.join('\n');
 }
 function recurringOccurrencesForDay(iso){
