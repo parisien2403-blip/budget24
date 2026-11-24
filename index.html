@@ -866,7 +866,7 @@ function computePartage(year, month){
   getRecurringOccurrences(year+1).forEach(o=>{
     if(o.defaultDate<ps || o.defaultDate>pe) return; // une échéance décalée reste sur son mois d'origine
     const r = recurring.find(x=>x.id===o.recurringId); if(!r) return;
-    lines.push({src:'rec', id:r.id, type:o.type, libelle:o.libelle, date:o.date, amount:Number(o.amount)||0, p:partageOf(r), set:!!r.partage, fin:r.dateFin||null});
+    lines.push({src:'rec', id:r.id, type:o.type, libelle:o.libelle, date:o.date, defaultDate:o.defaultDate, amount:Number(o.amount)||0, p:partageOf(r), set:!!r.partage, fin:r.dateFin||null});
   });
   transactions.forEach(t=>{
     if(t.date<ps || t.date>pe) return;
@@ -884,6 +884,9 @@ function computePartage(year, month){
   c.du = c.RM + c.A/2 - c.CM - c.pM*c.CF;           // ce qui revient au conjoint
   c.reste = Math.round((c.du - c.V)*100)/100;
   c.nonAttr = lines.filter(l=>!l.set).length;
+  // date du versement : date réelle de mon salaire principal de la période (ex. versé le 15 déc. au lieu du 25)
+  const sal = lines.filter(l=>l.src==='rec' && l.type==='income' && l.p==='G').sort((a,b)=>b.amount-a.amount)[0];
+  c.payDate = sal ? sal.date : ps;
   return c;
 }
 /* ---- Calcul rapide d'un achat ---- */
@@ -992,7 +995,7 @@ function generatePartagePdf(){
       const c = p.c;
       need(70);
       doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.setTextColor(28,28,30);
-      doc.text('Période du '+partPeriodLabel(p.y,p.m)+' — versement du '+formatDateFr(c.ps), 14, y); y += 7;
+      doc.text('Période du '+partPeriodLabel(p.y,p.m)+' — versement du '+formatDateFr(c.payDate), 14, y); y += 7;
       // tableau de calcul
       const rows = [
         ['Revenus', c.RG, c.RM],
@@ -1010,7 +1013,7 @@ function generatePartagePdf(){
         doc.setFont('helvetica','normal'); y += 6;
       });
       doc.setFont('helvetica','bold'); doc.setTextColor(219,39,119);
-      doc.text('À verser à '+nM+' le '+formatDateFr(c.ps)+(c.V>0?' (déjà viré '+M(c.V)+', reste '+M(c.reste)+')':''),16,y);
+      doc.text('À verser à '+nM+' le '+formatDateFr(c.payDate)+(c.V>0?' (déjà viré '+M(c.V)+', reste '+M(c.reste)+')':''),16,y);
       doc.text(M(c.du),194,y,{align:'right'}); doc.setFont('helvetica','normal'); y += 9;
       // lignes par groupe
       const groups = [
@@ -1059,7 +1062,7 @@ function generatePartagePdf(){
 
 function renderPartageCard(year, month){
   const c = computePartage(year, month); const n = escapeHtml(nomConj());
-  const label = Math.abs(c.reste)<0.01 && c.V>0 ? 'Tout est versé à '+n : 'À verser à '+n+' le '+formatDateFr(c.ps);
+  const label = Math.abs(c.reste)<0.01 && c.V>0 ? 'Tout est versé à '+n : 'À verser à '+n+' le '+formatDateFr(c.payDate);
   return `<button class="partage-card" data-action="open-partage">
     <div class="pc-top"><span>${label}</span><span>${formatDateFr(c.ps)} → ${formatDateFr(c.pe)}</span></div>
     <div class="pc-amt">${fmtMoney(c.reste,true)}</div>
@@ -1079,7 +1082,7 @@ function renderPartageModal(){
   return `<div class="overlay">
     <div class="sheet">
       <div class="sheet-head">
-        <div><h3>Partage avec ${n}</h3><div class="hint" style="margin:2px 0 0;">Versement du ${formatDateFr(c.ps)} · période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${c.pe.slice(0,4)}</div></div>
+        <div><h3>Partage avec ${n}</h3><div class="hint" style="margin:2px 0 0;">Versement du ${formatDateFr(c.payDate)} · période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${c.pe.slice(0,4)}</div></div>
         <button class="sheet-close" data-action="close-modal">${icon('x')}</button>
       </div>
       <table class="pt-table">
@@ -1104,10 +1107,10 @@ function renderPartageModal(){
 }
 function partageRecapText(){
   const c = computePartage(selectedYear, selectedMonth), n = nomConj();
-  const L = [`Versement du ${formatDateFr(c.ps)} — période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${c.pe.slice(0,4)}`, '',
+  const L = [`Versement du ${formatDateFr(c.payDate)} — période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${c.pe.slice(0,4)}`, '',
     `Revenus ${n} : ${fmtMoney(c.RM,true)}`, `Aides (moitié) : ${fmtMoney(c.A/2,true)}`, `Charges perso ${n} : –${fmtMoney(c.CM,true)}`,
     `Charges famille (${(Math.round(c.pM*1000)/10).toLocaleString('fr-FR')} % de ${fmtMoney(c.CF,true)}) : –${fmtMoney(c.pM*c.CF,true)}`,
-    `= Total : ${fmtMoney(c.du,true)}`].concat(c.V>0 ? [`Déjà viré : ${fmtMoney(c.V,true)}`] : [], [`À te verser le ${formatDateFr(c.ps)} : ${fmtMoney(c.reste,true)}`]);
+    `= Total : ${fmtMoney(c.du,true)}`].concat(c.V>0 ? [`Déjà viré : ${fmtMoney(c.V,true)}`] : [], [`À te verser le ${formatDateFr(c.payDate)} : ${fmtMoney(c.reste,true)}`]);
   return L.join('\n');
 }
 function recurringOccurrencesForDay(iso){
