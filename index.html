@@ -372,6 +372,13 @@
   .pt-line .pl-sub{font-size:11.5px;color:var(--navy-2);}
   .pt-line select{width:118px;flex-shrink:0;border:1px solid var(--separator);border-radius:8px;padding:7px 6px;font-size:13px;background:var(--card);color:var(--navy);}
   .pt-line select.unset{border-color:#F59E0B;}
+  .calc-seg{display:flex;gap:8px;margin-bottom:13px;}
+  .calc-seg button{flex:1;border-radius:12px;padding:11px 6px;font:inherit;font-size:14px;font-weight:700;color:var(--navy-2);background:var(--card);border:1px solid var(--separator);}
+  .calc-seg button.active{color:#fff;background:#DB2777;border-color:#DB2777;}
+  .calc-res{border-left:4px solid #DB2777;background:var(--card);border-top:1px solid var(--separator);border-right:1px solid var(--separator);border-bottom:1px solid var(--separator);padding:14px 16px;margin-top:4px;}
+  .calc-res .cr-l{font-size:13px;color:var(--navy-2);font-weight:600;}
+  .calc-res .cr-a{font-size:30px;font-weight:800;color:#DB2777;letter-spacing:-.3px;margin:2px 0;}
+  .calc-res .cr-s{font-size:12.5px;color:var(--navy-2);}
   .pdf-card{background:var(--card);border-radius:0;padding:16px 18px;margin-bottom:14px;box-shadow:none;border:1px solid var(--separator);}
   .pdf-row{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--separator);font-size:14px;color:var(--navy);}
   .pdf-row:last-child{border-bottom:none;font-weight:700;padding-top:12px;}
@@ -879,6 +886,38 @@ function computePartage(year, month){
   c.nonAttr = lines.filter(l=>!l.set).length;
   return c;
 }
+/* ---- Calcul rapide d'un achat ---- */
+let calcState = {amount:'', payer:'G', mode:'pct'};
+function calcPctM(){
+  const f = partPctFixe(); if(f!=null) return f;
+  const t = new Date(); let y = t.getFullYear(), m = t.getMonth();
+  if(t.getDate()<25){ m--; if(m<0){ m=11; y--; } }
+  return computePartage(y, m).pM;
+}
+function calcResultHtml(){
+  const n = escapeHtml(nomConj());
+  const a = parseFloat(String(calcState.amount).replace(/\s/g,'').replace(',','.')) || 0;
+  const pM = calcState.mode==='half' ? 0.5 : calcPctM();
+  const pctTxt = (Math.round(pM*1000)/10).toLocaleString('fr-FR')+' %';
+  const pctG = (Math.round((1-pM)*1000)/10).toLocaleString('fr-FR')+' %';
+  if(calcState.payer==='G') return `<div class="cr-l">${n} te doit</div><div class="cr-a">${fmtMoney(a*pM,true)}</div><div class="cr-s">Sa part : ${pctTxt} de ${fmtMoney(a,true)} · ta part : ${fmtMoney(a*(1-pM),true)}</div>`;
+  return `<div class="cr-l">Tu dois à ${n}</div><div class="cr-a">${fmtMoney(a*(1-pM),true)}</div><div class="cr-s">Ta part : ${pctG} de ${fmtMoney(a,true)} · sa part : ${fmtMoney(a*pM,true)}</div>`;
+}
+function renderCalcView(){
+  const n = escapeHtml(nomConj());
+  const pctTxt = (Math.round(calcPctM()*1000)/10).toLocaleString('fr-FR');
+  return `<div class="section-head"><h2>Partage d'un achat</h2></div>
+  <div class="pdf-card">
+    <div class="field"><label>Montant de l'achat</label><input type="text" inputmode="decimal" id="calc-amount" placeholder="0,00" value="${escapeHtml(calcState.amount)}"></div>
+    <label style="display:block;font-size:12.5px;font-weight:600;color:var(--navy-2);margin-bottom:6px;">Qui a payé ?</label>
+    <div class="calc-seg"><button class="${calcState.payer==='G'?'active':''}" data-action="calc-payer" data-v="G">Moi</button><button class="${calcState.payer==='M'?'active':''}" data-action="calc-payer" data-v="M">${n}</button></div>
+    <label style="display:block;font-size:12.5px;font-weight:600;color:var(--navy-2);margin-bottom:6px;">Répartition</label>
+    <div class="calc-seg"><button class="${calcState.mode==='pct'?'active':''}" data-action="calc-mode" data-v="pct">Famille ${pctTxt} %</button><button class="${calcState.mode==='half'?'active':''}" data-action="calc-mode" data-v="half">50 / 50</button></div>
+    <div class="calc-res" id="calc-res">${calcResultHtml()}</div>
+  </div>
+  <div class="hint">Le pourcentage « Famille » est celui des charges familiales (réglable dans le détail de la carte rose).</div>`;
+}
+
 function renderPartageCard(year, month){
   const c = computePartage(year, month); const n = escapeHtml(nomConj());
   const label = Math.abs(c.reste)<0.01 && c.V>0 ? 'Tout est versé à '+n : 'À verser à '+n+' le '+formatDateFr(c.ps);
@@ -1199,7 +1238,8 @@ function renderActionBar(){
     {key:'expenses', label:'Dépenses', icon:'trendDown'},
     {key:'incomes', label:'Revenus', icon:'trendUp'},
     {key:'creanciers', label:'Créanciers', icon:'landmark'},
-    {key:'pdf', label:'PDF', icon:'receipt'}
+    {key:'pdf', label:'PDF', icon:'receipt'},
+    {key:'calc', label:'Partage', icon:'coin'}
   ];
   let html = '<div class="action-bar">';
   tabs.forEach(t=>{
@@ -1217,6 +1257,7 @@ function renderMain(){
   if(activeView==='incomes') return renderRecurringList('income');
   if(activeView==='creanciers') return renderCreancierList();
   if(activeView==='pdf') return renderPdfView();
+  if(activeView==='calc') return renderCalcView();
   return renderCalendar();
 }
 
@@ -1794,6 +1835,11 @@ document.addEventListener('touchend', (e)=>{
   }
 }, {passive:true});
 document.addEventListener('input', (e)=>{
+  if(e.target.id==='calc-amount'){
+    calcState.amount = e.target.value;
+    const r = document.getElementById('calc-res'); if(r) r.innerHTML = calcResultHtml();
+    return;
+  }
   if(e.target.id==='list-search'){
     searchQuery = e.target.value;
     const cursorPos = e.target.selectionStart;
@@ -1870,6 +1916,8 @@ document.addEventListener('click', async (e)=>{
   if(action==='pdf-next'){ pdfMonth++; if(pdfMonth>11){pdfMonth=0;pdfYear++;} resetScrollNext=true; render(); return; }
 
   if(action==='open-settings'){ modal={kind:'settings'}; render(); return; }
+  if(action==='calc-payer'){ calcState.payer = btn.dataset.v; render(); return; }
+  if(action==='calc-mode'){ calcState.mode = btn.dataset.v; render(); return; }
   if(action==='open-partage'){ modal={kind:'partage'}; render(); return; }
   if(action==='share-partage'){
     const txt = partageRecapText();
