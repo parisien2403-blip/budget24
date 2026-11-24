@@ -888,13 +888,20 @@ function computePartage(year, month){
 }
 /* ---- Calcul rapide d'un achat ---- */
 let calcState = {amount:'', payer:'G'};
+function calcPctM(){ // part de l'épouse : % réglé dans la carte rose (27,3 %), sinon calcul selon les revenus
+  const f = partPctFixe(); if(f!=null) return f;
+  const t = new Date(); let y = t.getFullYear(), m = t.getMonth();
+  if(t.getDate()<25){ m--; if(m<0){ m=11; y--; } }
+  return computePartage(y, m).pM;
+}
 function calcResultHtml(){
   const n = escapeHtml(nomConj());
   const a = parseFloat(String(calcState.amount).replace(/\s/g,'').replace(',','.')) || 0;
-  const h = a/2;
-  if(calcState.payer==='G') return `<div class="cr-l">${n} te doit</div><div class="cr-a">${fmtMoney(h,true)}</div><div class="cr-s">Tu as payé ${fmtMoney(a,true)} : la moitié est pour elle.</div>`;
-  if(calcState.payer==='M') return `<div class="cr-l">Tu dois à ${n}</div><div class="cr-a">${fmtMoney(h,true)}</div><div class="cr-s">Elle a payé ${fmtMoney(a,true)} : la moitié est pour toi.</div>`;
-  return `<div class="cr-l">Chacun paye</div><div class="cr-a">${fmtMoney(h,true)}</div><div class="cr-s">${fmtMoney(a,true)} partagé en deux : ${fmtMoney(h,true)} pour toi, ${fmtMoney(h,true)} pour ${n}.</div>`;
+  const pM = calcPctM(), pG = 1 - pM;
+  const pc = v => (Math.round(v*1000)/10).toLocaleString('fr-FR')+' %';
+  if(calcState.payer==='G') return `<div class="cr-l">${n} te doit</div><div class="cr-a">${fmtMoney(a*pM,true)}</div><div class="cr-s">Tu as payé ${fmtMoney(a,true)} : sa part est de ${pc(pM)}.</div>`;
+  if(calcState.payer==='M') return `<div class="cr-l">Tu dois à ${n}</div><div class="cr-a">${fmtMoney(a*pG,true)}</div><div class="cr-s">Elle a payé ${fmtMoney(a,true)} : ta part est de ${pc(pG)}.</div>`;
+  return `<div class="cr-l">Chacun paye</div><div class="cr-a">${fmtMoney(a/2,true)}</div><div class="cr-s">${fmtMoney(a,true)} partagé en deux : ${fmtMoney(a/2,true)} pour toi, ${fmtMoney(a/2,true)} pour ${n}.</div>`;
 }
 function renderCalcView(){
   const n = escapeHtml(nomConj());
