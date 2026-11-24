@@ -859,6 +859,8 @@ function partagePeriod(year, month){ // virement le 25 du mois, pour la période
   const e = new Date(year, month+1, 24);
   return [fmtISO(year, month, 25), fmtISO(e.getFullYear(), e.getMonth(), 24)];
 }
+function salConj(){ const x = settings.salConj || {}; return {jour: x.jour || '', paliers: Array.isArray(x.paliers) ? x.paliers : []}; }
+function salConjAt(iso){ let a = 0, best = ''; salConj().paliers.forEach(p=>{ if(p.dateDebut && p.dateDebut<=iso && p.dateDebut>=best){ best = p.dateDebut; a = Number(p.montant)||0; } }); return a; }
 function payLabel(c){ return '1er '+MONTHS_ABBR[parseInt(c.payDate.slice(5,7),10)-1]; }
 function partPctFixe(){ const v = Number(settings.partPct); return v>0 && v<100 ? v/100 : null; }
 function computePartage(year, month){
@@ -880,8 +882,9 @@ function computePartage(year, month){
     if(l.type==='income'){ if(l.p==='M') c.RM+=a; else if(l.p==='A') c.A+=a; else if(l.p==='V') c.Vin+=a; else c.RG+=a; }
     else { if(l.p==='G') c.CG+=a; else if(l.p==='M') c.CM+=a; else if(l.p==='V') c.V+=a; else c.CF+=a; }
   });
-  const tot = c.RG + c.RM + c.A;
-  c.pM = partPctFixe() ?? (tot>0 ? (c.RM + c.A/2) / tot : 0.5);   // % fixe choisi, sinon prorata revenus + aides
+  c.SM = salConjAt(ps);                              // son salaire, versé sur son propre compte
+  const tot = c.RG + c.RM + c.SM + c.A;
+  c.pM = partPctFixe() ?? (tot>0 ? (c.RM + c.SM + c.A/2) / tot : 0.5);   // % fixe choisi, sinon prorata revenus + aides
   c.du = c.RM + c.A/2 - c.CM - c.pM*c.CF;           // ce qui revient au conjoint
   c.reste = Math.round((c.du - c.V)*100)/100;
   c.nonAttr = lines.filter(l=>!l.set).length;
@@ -889,6 +892,7 @@ function computePartage(year, month){
   // doit = sa part famille + ses charges perso payées sur mon compte − sa moitié des aides
   //        − ses revenus éventuellement arrivés sur mon compte + mes virements vers elle
   c.doit = c.pM*c.CF + c.CM - c.A/2 - c.RM + c.V;
+  c.resteVivreM = c.SM + c.RM + c.A/2 - c.CM - c.pM*c.CF;
   c.resteDoit = Math.round((c.doit - c.Vin)*100)/100;
   const pd = new Date(year, month+1, 1);
   c.payDate = fmtISO(pd.getFullYear(), pd.getMonth(), 1);
@@ -911,9 +915,32 @@ function calcResultHtml(){
   if(calcState.payer==='M') return `<div class="cr-l">Tu dois à ${n}</div><div class="cr-a">${fmtMoney(a*pG,true)}</div><div class="cr-s">Elle a payé ${fmtMoney(a,true)} : ta part est de ${pc(pG)}.</div>`;
   return `<div class="cr-l">Chacun paye</div><div class="cr-a">${fmtMoney(a/2,true)}</div><div class="cr-s">${fmtMoney(a,true)} partagé en deux : ${fmtMoney(a/2,true)} pour toi, ${fmtMoney(a/2,true)} pour ${n}.</div>`;
 }
+function curPeriodYM(){ const t=new Date(); let y=t.getFullYear(), m=t.getMonth(); if(t.getDate()<25){ m--; if(m<0){m=11;y--;} } return [y,m]; }
 function renderCalcView(){
   const n = escapeHtml(nomConj());
-  return `<div class="section-head"><h2>Partage d'un achat</h2></div>
+  let [cy,cm] = curPeriodYM();
+  if(computePartage(cy,cm).payDate < todayISO()){ cm++; if(cm>11){ cm=0; cy++; } } // prochain 1er à venir
+  const nx = new Date(cy, cm+1, 1);
+  const owe = (y,m) => { const c = computePartage(y,m); return `<div class="pdf-row"><span>Le ${payLabel(c)} <span style="color:var(--navy-2);font-size:12px;">(${formatDateFr(c.ps)} → ${formatDateFr(c.pe)})</span></span><span class="v" style="color:#DB2777;font-weight:800;">${fmtMoney(c.resteDoit,true)}</span></div>`; };
+  const c0 = computePartage(cy,cm); const sc = salConj();
+  const pal = (p,i) => `<div class="palier-row" data-sal-index="${i}"><input type="text" inputmode="decimal" class="palier-montant sal-montant" placeholder="Montant net" value="${p.montant!=null?p.montant:''}"><input type="date" class="palier-debut sal-debut" value="${p.dateDebut||''}"><button class="icon-action danger" data-action="sal-del" data-index="${i}" aria-label="Supprimer">${icon('trash')}</button></div>`;
+  const rows = sc.paliers.length ? sc.paliers : [{montant:'', dateDebut:''}];
+  return `<div class="section-head"><h2>Ce que ${n} te doit</h2></div>
+  <div class="pdf-card" style="border-left:4px solid #DB2777;">
+    ${owe(cy,cm)}${owe(nx.getFullYear(), nx.getMonth())}
+    <div class="hint" style="margin:8px 0 0;">Sa part des charges familiales (${(Math.round(c0.pM*1000)/10).toLocaleString('fr-FR')} %) + ses charges perso − sa moitié des aides${c0.SM>0?` · son reste à vivre : <b>${fmtMoney(c0.resteVivreM,true)}</b>`:''}. Touche la carte rose du calendrier pour le détail.</div>
+  </div>
+  <div class="section-head"><h2>Salaire de ${n}</h2></div>
+  <div class="pdf-card">
+    <div class="hint" style="margin:0 0 10px;">Il arrive sur son compte : il ne touche pas ton solde. Il sert à calculer sa part des charges familiales si le pourcentage n'est pas fixé, et son reste à vivre. S'il change, ajoute une ligne « à partir du ».</div>
+    <label style="display:block;font-size:12.5px;font-weight:600;color:var(--navy-2);margin-bottom:6px;">Montant net · à partir du</label>
+    <div id="sal-list">${rows.map(pal).join('')}</div>
+    <button class="link-btn" style="text-align:left;color:var(--navy);padding:4px 0 10px;" data-action="sal-add">+ Ajouter un changement de salaire</button>
+    <div class="field"><label>Jour de versement</label><input type="text" inputmode="numeric" id="sal-jour" placeholder="ex. 28" value="${escapeHtml(String(sc.jour||''))}"></div>
+    <div class="field"><label>Part de ${n} dans les charges familiales (%)</label><input type="text" inputmode="decimal" id="sal-pct" placeholder="vide = calcul selon les salaires" value="${partPctFixe()!=null?settings.partPct:''}"></div>
+    <button class="save-btn" data-action="sal-save">Enregistrer</button>
+  </div>
+  <div class="section-head"><h2>Partage d'un achat</h2></div>
   <div class="pdf-card">
     <div class="field"><label>Montant de l'achat</label><input type="text" inputmode="decimal" id="calc-amount" placeholder="0,00" value="${escapeHtml(calcState.amount)}"></div>
     <label style="display:block;font-size:12.5px;font-weight:600;color:var(--navy-2);margin-bottom:6px;">Qui paye ?</label>
@@ -2074,6 +2101,22 @@ document.addEventListener('click', async (e)=>{
   if(action==='pdf-next'){ pdfMonth++; if(pdfMonth>11){pdfMonth=0;pdfYear++;} resetScrollNext=true; render(); return; }
 
   if(action==='open-settings'){ modal={kind:'settings'}; render(); return; }
+  if(action==='sal-add' || action==='sal-del' || action==='sal-save'){
+    const read = () => Array.from(document.querySelectorAll('#sal-list .palier-row')).map(r=>({montant: r.querySelector('.sal-montant').value.trim().replace(',','.'), dateDebut: r.querySelector('.sal-debut').value}));
+    let pals = read();
+    const cur = salConj();
+    if(action==='sal-add'){ pals.push({montant:'', dateDebut: todayISO()}); settings.salConj = {jour: document.getElementById('sal-jour').value, paliers: pals}; render(); return; }
+    if(action==='sal-del'){ pals.splice(parseInt(btn.dataset.index,10),1); settings.salConj = {jour: document.getElementById('sal-jour').value, paliers: pals}; render(); return; }
+    // enregistrer
+    pals = pals.filter(p=>p.montant!=='' || p.dateDebut);
+    for(const p of pals){ if(!(parseFloat(p.montant)>=0) || !p.dateDebut){ showToast('Indique un montant et une date pour chaque ligne.'); return; } }
+    const jour = parseInt(document.getElementById('sal-jour').value,10);
+    const pv = parseFloat(String(document.getElementById('sal-pct').value).replace(',','.'));
+    settings.salConj = {jour: (jour>=1 && jour<=31) ? jour : '', paliers: pals.map(p=>({montant:Number(p.montant), dateDebut:p.dateDebut})).sort((a,b)=>a.dateDebut.localeCompare(b.dateDebut))};
+    settings.partPct = (pv>0 && pv<100) ? pv : null;
+    await persist(); render(); showToast('Enregistré.');
+    return;
+  }
   if(action==='calc-payer'){ calcState.payer = btn.dataset.v; render(); return; }
   if(action==='open-partage'){ modal={kind:'partage'}; render(); return; }
   if(action==='share-partage'){
