@@ -866,7 +866,7 @@ function computePartage(year, month){
   getRecurringOccurrences(year+1).forEach(o=>{
     if(o.defaultDate<ps || o.defaultDate>pe) return; // une échéance décalée reste sur son mois d'origine
     const r = recurring.find(x=>x.id===o.recurringId); if(!r) return;
-    lines.push({src:'rec', id:r.id, type:o.type, libelle:o.libelle, date:o.date, amount:Number(o.amount)||0, p:partageOf(r), set:!!r.partage});
+    lines.push({src:'rec', id:r.id, type:o.type, libelle:o.libelle, date:o.date, amount:Number(o.amount)||0, p:partageOf(r), set:!!r.partage, fin:r.dateFin||null});
   });
   transactions.forEach(t=>{
     if(t.date<ps || t.date>pe) return;
@@ -914,6 +914,149 @@ function renderCalcView(){
   </div>`;
 }
 
+/* ---- PDF récapitulatif du partage ---- */
+let partPdf = null; // {from:'2026-10', to:'2026-10'} (mois du versement, 0-based)
+function partKey(y,m){ return y+'-'+m; }
+function partParse(k){ const [y,m]=k.split('-').map(Number); return [y,m]; }
+function partDefault(){ const t=new Date(); let y=t.getFullYear(), m=t.getMonth(); if(t.getDate()<25){ m--; if(m<0){m=11;y--;} } return partKey(y,m); }
+function partPeriodLabel(y,m){ const [ps,pe]=partagePeriod(y,m); return formatDateFr(ps)+' '+ps.slice(0,4)+' au '+formatDateFr(pe)+' '+pe.slice(0,4); }
+function renderPartagePdfCard(){
+  if(!partPdf){ const d=partDefault(); partPdf={from:d, to:d}; }
+  const [dy,dm] = partParse(partDefault()); const opts=[];
+  for(let i=-18;i<=6;i++){ const d=new Date(dy, dm+i, 1); opts.push([partKey(d.getFullYear(), d.getMonth()), d.getFullYear(), d.getMonth()]); }
+  const sel = (id,val) => '<select id="'+id+'">'+opts.map(([k,y,m])=>'<option value="'+k+'" '+(k===val?'selected':'')+'>'+escapeHtml(partPeriodLabel(y,m))+'</option>').join('')+'</select>';
+  return `<div class="pdf-card" style="margin-top:18px;border-left:4px solid #DB2777;">
+    <div class="section-head" style="margin-bottom:8px;padding-top:0;"><h2 style="font-size:15px;">Récapitulatif du partage avec ${escapeHtml(nomConj())}</h2></div>
+    <div class="hint" style="margin:0 0 10px;">Revenus, aides, dépenses familiales et charges de chacun, avec le montant versé chaque 25. Choisis une ou plusieurs périodes.</div>
+    <div class="field"><label>De la période</label>${sel('part-from', partPdf.from)}</div>
+    <div class="field"><label>À la période</label>${sel('part-to', partPdf.to)}</div>
+    <button class="pdf-btn" data-action="generate-partage-pdf" style="background:#DB2777;">${icon('download')} Télécharger le PDF du partage</button>
+  </div>`;
+}
+function generatePartagePdf(){
+  try{
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const pageW = 210, nM = nomConj(), nG = settings.nomMoi || 'Germain';
+    let [fy,fm] = partParse(partPdf.from), [ty,tm] = partParse(partPdf.to);
+    if(fy*12+fm > ty*12+tm){ [fy,fm,ty,tm] = [ty,tm,fy,fm]; }
+    const periods = [];
+    for(let k=fy*12+fm; k<=ty*12+tm && periods.length<36; k++){ const y=Math.floor(k/12), m=k%12; periods.push({y, m, c:computePartage(y,m)}); }
+    const M = v => fmtMoneyPdf(Math.abs(v)<0.005?0:v,true);
+    const pctTxt = v => (Math.round(v*1000)/10).toLocaleString('fr-FR')+' %';
+    let y = 18;
+    const newPage = () => { doc.addPage(); y = 20; };
+    const need = h => { if(y+h>280) newPage(); };
+    const head = (cols) => { // cols: [[label, x, align]]
+      doc.setFillColor(28,28,30); doc.rect(14, y-5, 182, 7, 'F');
+      doc.setFont('helvetica','bold'); doc.setFontSize(7.5); doc.setTextColor(255,255,255);
+      cols.forEach(([l,x,a])=>doc.text(l, x, y, a?{align:a}:undefined)); y += 7;
+      doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
+    };
+
+    /* En-tête */
+    doc.setFont('helvetica','bold'); doc.setFontSize(18); doc.setTextColor(28,28,30);
+    doc.text('Récapitulatif du partage', pageW/2, y, {align:'center'}); y += 7;
+    doc.setFont('helvetica','normal'); doc.setFontSize(10.5); doc.setTextColor(110,110,115);
+    doc.text(nG+' & '+nM+' — du '+partPeriodLabel(fy,fm).split(' au ')[0]+' au '+partPeriodLabel(ty,tm).split(' au ')[1], pageW/2, y, {align:'center'}); y += 5;
+    const fixe = partPctFixe();
+    doc.text('Part de '+nM+' dans les charges familiales : '+(fixe!=null ? pctTxt(fixe) : 'selon les revenus de chacun')+' · aides partagées 50/50', pageW/2, y, {align:'center'}); y += 6;
+    doc.setDrawColor(220); doc.setLineWidth(0.4); doc.line(14,y,196,y); y += 9;
+
+    /* Synthèse par période */
+    doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.setTextColor(28,28,30);
+    doc.text('Synthèse par période', 14, y); y += 8;
+    const cols = [['PERIODE',16],['REV. '+nG.toUpperCase().slice(0,8),74,'right'],['REV. '+nM.toUpperCase().slice(0,8),95,'right'],['AIDES',113,'right'],['FAMILLE',134,'right'],['PERSO '+nG.toUpperCase().slice(0,1)+'.',152,'right'],['PERSO '+nM.toUpperCase().slice(0,1)+'.',170,'right'],['A VERSER',194,'right']];
+    head(cols);
+    const T = {RG:0,RM:0,A:0,CF:0,CG:0,CM:0,du:0,V:0};
+    periods.forEach((p,i)=>{
+      need(7); if(y===20) head(cols);
+      const c = p.c; Object.keys(T).forEach(k=>T[k]+=c[k]);
+      if(i%2===1){ doc.setFillColor(247,247,250); doc.rect(14,y-4.2,182,6,'F'); }
+      doc.setTextColor(60,60,65);
+      doc.text(formatDateFr(c.ps)+' - '+formatDateFr(c.pe)+' '+c.pe.slice(2,4), 16, y);
+      [[c.RG,74],[c.RM,95],[c.A,113],[c.CF,134],[c.CG,152],[c.CM,170]].forEach(([v,x])=>doc.text(M(v),x,y,{align:'right'}));
+      doc.setTextColor(219,39,119); doc.setFont('helvetica','bold'); doc.text(M(c.du),194,y,{align:'right'}); doc.setFont('helvetica','normal');
+      y += 6;
+    });
+    if(periods.length>1){
+      doc.setDrawColor(28,28,30); doc.line(14,y-3.5,196,y-3.5); y += 1.5;
+      doc.setFont('helvetica','bold'); doc.setTextColor(28,28,30); doc.text('TOTAL',16,y);
+      [[T.RG,74],[T.RM,95],[T.A,113],[T.CF,134],[T.CG,152],[T.CM,170]].forEach(([v,x])=>doc.text(M(v),x,y,{align:'right'}));
+      doc.setTextColor(219,39,119); doc.text(M(T.du),194,y,{align:'right'}); doc.setFont('helvetica','normal'); y += 6;
+    }
+    y += 6;
+
+    /* Détail de chaque période */
+    periods.forEach(p=>{
+      const c = p.c;
+      need(70);
+      doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.setTextColor(28,28,30);
+      doc.text('Période du '+partPeriodLabel(p.y,p.m)+' — versement du '+formatDateFr(c.ps), 14, y); y += 7;
+      // tableau de calcul
+      const rows = [
+        ['Revenus', c.RG, c.RM],
+        ['Aides (moitié chacun)', c.A/2, c.A/2],
+        ['Charges perso', -c.CG, -c.CM],
+        ['Charges familiales ('+pctTxt(1-c.pM)+' / '+pctTxt(c.pM)+' de '+M(c.CF)+')', -(1-c.pM)*c.CF, -c.pM*c.CF],
+        ['Reste à vivre', c.RG+c.A/2-c.CG-(1-c.pM)*c.CF, c.du]
+      ];
+      head([['',16],[nG.toUpperCase(),150,'right'],[nM.toUpperCase(),194,'right']]);
+      rows.forEach((r,i)=>{
+        const last = i===rows.length-1;
+        if(last){ doc.setFont('helvetica','bold'); doc.setDrawColor(200); doc.line(14,y-4,196,y-4); }
+        doc.setTextColor(60,60,65); doc.text(r[0],16,y);
+        doc.text(M(r[1]),150,y,{align:'right'}); doc.text(M(r[2]),194,y,{align:'right'});
+        doc.setFont('helvetica','normal'); y += 6;
+      });
+      doc.setFont('helvetica','bold'); doc.setTextColor(219,39,119);
+      doc.text('À verser à '+nM+' le '+formatDateFr(c.ps)+(c.V>0?' (déjà viré '+M(c.V)+', reste '+M(c.reste)+')':''),16,y);
+      doc.text(M(c.du),194,y,{align:'right'}); doc.setFont('helvetica','normal'); y += 9;
+      // lignes par groupe
+      const groups = [
+        ['Dépenses familiales', c.lines.filter(l=>l.type!=='income' && l.p==='F')],
+        ['Charges perso '+nG, c.lines.filter(l=>l.type!=='income' && l.p==='G')],
+        ['Charges perso '+nM, c.lines.filter(l=>l.type!=='income' && l.p==='M')],
+        ['Revenus '+nG, c.lines.filter(l=>l.type==='income' && l.p==='G')],
+        ['Revenus '+nM, c.lines.filter(l=>l.type==='income' && l.p==='M')],
+        ['Aides (partagées 50/50)', c.lines.filter(l=>l.type==='income' && l.p==='A')],
+        ['Virements à '+nM, c.lines.filter(l=>l.type!=='income' && l.p==='V')]
+      ];
+      groups.forEach(([title, L])=>{
+        if(!L.length) return;
+        need(16);
+        const tot = L.reduce((s,l)=>s+l.amount,0);
+        doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(28,28,30);
+        doc.text(title, 16, y); doc.text(M(tot), 194, y, {align:'right'}); y += 5.5;
+        doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
+        L.forEach((l,i)=>{
+          need(6);
+          if(i%2===1){ doc.setFillColor(247,247,250); doc.rect(14,y-4,182,5.5,'F'); }
+          doc.setTextColor(90,90,95);
+          doc.text(formatDateFr(l.date), 18, y);
+          doc.text(String(l.libelle||'—').slice(0,55), 36, y);
+          const fd = l.fin ? l.fin.split('-') : null;
+          if(fd){ doc.setFont('helvetica','bold'); doc.setTextColor(180,83,9); }
+          doc.text(l.src==='rec' ? (fd ? "Jusqu'au "+fd[2]+'/'+fd[1]+'/'+fd[0] : 'Récurrent') : 'Ponctuel', 145, y);
+          doc.setFont('helvetica','normal'); doc.setTextColor(90,90,95);
+          doc.text(M(l.amount), 194, y, {align:'right'});
+          y += 5.5;
+        });
+        y += 2.5;
+      });
+      doc.setDrawColor(220); doc.line(14,y,196,y); y += 9;
+    });
+
+    const pages = doc.getNumberOfPages();
+    for(let i=1;i<=pages;i++){ doc.setPage(i); doc.setFont('helvetica','italic'); doc.setFontSize(8); doc.setTextColor(150,150,155);
+      doc.text("Genere par Bouk's Budget — page "+i+'/'+pages, pageW/2, 290, {align:'center'}); }
+    doc.save('partage-'+partPdf.from+(partPdf.to!==partPdf.from?'_'+partPdf.to:'')+'.pdf');
+    showToast('PDF téléchargé.');
+  }catch(err){
+    console.error(err); showToast('Impossible de générer le PDF.');
+  }
+}
+
 function renderPartageCard(year, month){
   const c = computePartage(year, month); const n = escapeHtml(nomConj());
   const label = Math.abs(c.reste)<0.01 && c.V>0 ? 'Tout est versé à '+n : 'À verser à '+n+' le '+formatDateFr(c.ps);
@@ -929,7 +1072,7 @@ function renderPartageModal(){
   const pct = v => (Math.round(v*1000)/10).toLocaleString('fr-FR')+' %';
   const neg = v => Math.abs(v)<0.005 ? fmtMoney(0,true) : '–'+fmtMoney(v,true);
   const line = l => `<div class="pt-line">
-      <div class="pl-mid"><div class="pl-lib">${escapeHtml(l.libelle)}</div><div class="pl-sub">${formatDateFr(l.date)} · ${l.type==='income'?'+':'–'} ${fmtMoney(l.amount,true)}${l.src==='rec'?' · récurrent':''}</div></div>
+      <div class="pl-mid"><div class="pl-lib">${escapeHtml(l.libelle)}</div><div class="pl-sub">${formatDateFr(l.date)} · ${l.type==='income'?'+':'–'} ${fmtMoney(l.amount,true)}${l.src==='rec'?(l.fin?' · jusqu\'au '+formatDateFull(l.fin):' · récurrent'):''}</div></div>
       ${partageSelect(l.type, l.p, 'class="partage-select'+(l.set?'':' unset')+'" data-src="'+l.src+'" data-id="'+l.id+'"')}
     </div>`;
   const inc = c.lines.filter(l=>l.type==='income'), exp = c.lines.filter(l=>l.type!=='income');
@@ -1425,6 +1568,7 @@ function renderPdfView(){
   ${renderCategoryBreakdownCard(pdfYear,pdfMonth)}
   ${renderStatsCard(pdfYear,pdfMonth)}
   <button class="pdf-btn" data-action="generate-pdf">${icon('download')} Télécharger le PDF du relevé</button>
+  ${renderPartagePdfCard()}
   `;
 }
 function renderCategoryBreakdownCard(year,month){
@@ -1867,6 +2011,10 @@ document.addEventListener('change', (e)=>{
     return;
   }
   if(e.target.id==='rec-partage' && modal){ modal.partage = e.target.value; }
+  if(e.target.id==='part-from' || e.target.id==='part-to'){
+    if(!partPdf){ const d=partDefault(); partPdf={from:d,to:d}; }
+    partPdf[e.target.id==='part-from'?'from':'to'] = e.target.value; return;
+  }
   if(e.target.id==='partage-pct'){
     const v = parseFloat(String(e.target.value).replace(',','.'));
     settings.partPct = (v>0 && v<100) ? v : null; persist();
@@ -2227,6 +2375,7 @@ document.addEventListener('click', async (e)=>{
   if(action==='trigger-import'){ const fi=document.getElementById('import-file-input'); if(fi) fi.click(); return; }
 
   if(action==='generate-pdf'){ generatePdf(pdfYear, pdfMonth); return; }
+  if(action==='generate-partage-pdf'){ generatePartagePdf(); return; }
 });
 
 /* =================== PDF GENERATION =================== */
