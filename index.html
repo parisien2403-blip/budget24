@@ -854,7 +854,7 @@ function txForDay(iso){ return transactions.filter(t=>t.date===iso); }
 // partage : revenus G (moi) | M (conjoint) | A (aide 50/50) ; dépenses F (famille) | G | M | V (virement au conjoint)
 function nomConj(){ return settings.nomConjoint || 'Mélanie'; }
 function partageOf(x){ return x.partage || (x.type==='income' ? 'G' : 'F'); }
-function partageOptions(type){ return type==='income' ? [['G','Moi'],['M',nomConj()],['A','Aide 50/50'],['V','Virement de '+nomConj()]] : [['F','Famille'],['G','Moi'],['M',nomConj()],['V','Virement à '+nomConj()]]; }
+function partageOptions(type){ return type==='income' ? [['G','Moi'],['M',nomConj()],['A','Aide 50/50'],['V','Virement de '+nomConj()]] : [['F','Famille'],['H','50 / 50'],['G','Moi'],['M',nomConj()],['V','Virement à '+nomConj()]]; }
 function partageSelect(type, val, attrs){ return '<select '+attrs+'>'+partageOptions(type).map(([v,l])=>'<option value="'+v+'" '+(v===val?'selected':'')+'>'+escapeHtml(l)+'</option>').join('')+'</select>'; }
 function partagePeriod(year, month){ // virement le 25 du mois, pour la période du 25 au 24 du mois suivant
   const e = new Date(year, month+1, 24);
@@ -892,11 +892,11 @@ function computePartage(year, month){
     lines.push({src:'tx', id:t.id, type:t.type, libelle:t.description||(t.type==='income'?'Revenu':'Dépense'), date:t.date, amount:Number(t.montant)||0, p:partageOf(t), set:!!t.partage});
   });
   lines.sort((a,b)=>a.date.localeCompare(b.date));
-  const c = {ps, pe, lines, RG:0, RM:0, A:0, CG:0, CM:0, CF:0, V:0, Vin:0};
+  const c = {ps, pe, lines, RG:0, RM:0, A:0, CG:0, CM:0, CF:0, CH:0, V:0, Vin:0};
   lines.forEach(l=>{
     const a = l.amount;
     if(l.type==='income'){ if(l.p==='M') c.RM+=a; else if(l.p==='A') c.A+=a; else if(l.p==='V') c.Vin+=a; else c.RG+=a; }
-    else { if(l.p==='G') c.CG+=a; else if(l.p==='M') c.CM+=a; else if(l.p==='V') c.V+=a; else c.CF+=a; }
+    else { if(l.p==='G') c.CG+=a; else if(l.p==='M') c.CM+=a; else if(l.p==='V') c.V+=a; else if(l.p==='H') c.CH+=a; else c.CF+=a; }
   });
   c.SM = salConjAt(ps);                              // son salaire, versé sur son propre compte
   const tot = c.RG + c.RM + c.SM + c.A;
@@ -907,8 +907,8 @@ function computePartage(year, month){
   // Son salaire arrive sur son compte : elle me rembourse le 1er du mois sa part de la période.
   // doit = sa part famille + ses charges perso payées sur mon compte − sa moitié des aides
   //        − ses revenus éventuellement arrivés sur mon compte + mes virements vers elle
-  c.doit = c.pM*c.CF + c.CM - c.A/2 - c.RM + c.V;
-  c.resteVivreM = c.SM + c.RM + c.A/2 - c.CM - c.pM*c.CF;
+  c.doit = c.pM*c.CF + c.CH/2 + c.CM - c.A/2 - c.RM + c.V;     // dépenses 50/50 : elle en doit la moitié
+  c.resteVivreM = c.SM + c.RM + c.A/2 - c.CM - c.pM*c.CF - c.CH/2;
   c.resteDoit = Math.round((c.doit - c.Vin)*100)/100;
   const pd = new Date(year, month+1, 1);
   c.payDate = fmtISO(pd.getFullYear(), pd.getMonth(), 1);
@@ -1020,17 +1020,17 @@ function generatePartagePdf(){
     doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.setTextColor(28,28,30);
     doc.text('Synthèse par période', 14, y); y += 8;
     const n3 = nM.toUpperCase().slice(0,3)+'.';
-    const cols = [['PERIODE',16],['FAMILLE',78,'right'],['PART '+n3+' FAM.',104,'right'],['PERSO '+n3,126,'right'],['AIDES (1/2)',148,'right'],['DEJA RECU',170,'right'],['ELLE DOIT',194,'right']];
+    const cols = [['PERIODE',16],['FAMILLE',78,'right'],['PART '+n3,104,'right'],['PERSO '+n3,126,'right'],['AIDES (1/2)',148,'right'],['DEJA RECU',170,'right'],['ELLE DOIT',194,'right']];
     head(cols);
     const T = {CF:0,fam:0,CM:0,A2:0,Vin:0,doit:0};
     periods.forEach((p,i)=>{
       need(7); if(y===20) head(cols);
-      const c = p.c; const fam = c.pM*c.CF;
-      T.CF+=c.CF; T.fam+=fam; T.CM+=c.CM; T.A2+=c.A/2; T.Vin+=c.Vin; T.doit+=c.resteDoit;
+      const c = p.c; const fam = c.pM*c.CF + c.CH/2;
+      T.CF+=c.CF+c.CH; T.fam+=fam; T.CM+=c.CM; T.A2+=c.A/2; T.Vin+=c.Vin; T.doit+=c.resteDoit;
       if(i%2===1){ doc.setFillColor(247,247,250); doc.rect(14,y-4.2,182,6,'F'); }
       doc.setTextColor(60,60,65);
       doc.text(formatDateFr(c.ps)+' - '+formatDateFr(c.pe)+' '+c.pe.slice(2,4), 16, y);
-      [[c.CF,78],[fam,104],[c.CM,126],[-c.A/2,148],[c.Vin,170]].forEach(([v,x])=>doc.text(M(v),x,y,{align:'right'}));
+      [[c.CF+c.CH,78],[fam,104],[c.CM,126],[-c.A/2,148],[c.Vin,170]].forEach(([v,x])=>doc.text(M(v),x,y,{align:'right'}));
       doc.setTextColor(219,39,119); doc.setFont('helvetica','bold'); doc.text(M(c.resteDoit),194,y,{align:'right'}); doc.setFont('helvetica','normal');
       y += 6;
     });
@@ -1050,6 +1050,7 @@ function generatePartagePdf(){
       doc.text('Période du '+partPeriodLabel(p.y,p.m)+' — à régler le '+payLabel(c), 14, y); y += 7;
       const rows = [['Sa part des charges familiales ('+pctTxt(c.pM)+' de '+M(c.CF)+')', c.pM*c.CF],
         ['Ses charges perso payées sur le compte de '+nG, c.CM],
+        ...(c.CH>0 ? [['Moitié des dépenses 50/50 ('+M(c.CH)+')', c.CH/2]] : []),
         ['Moins sa moitié des aides ('+M(c.A)+')', -c.A/2]];
       if(c.RM>0) rows.push(['Moins ses revenus arrivés sur le compte de '+nG, -c.RM]);
       if(c.V>0) rows.push(['Plus les virements de '+nG+' vers elle', c.V]);
@@ -1067,6 +1068,7 @@ function generatePartagePdf(){
       doc.text(M(Math.abs(c.resteDoit)),194,y,{align:'right'}); doc.setFont('helvetica','normal'); y += 9;
       const groups = [
         ['Dépenses familiales', c.lines.filter(l=>l.type!=='income' && l.p==='F')],
+        ['Dépenses 50/50', c.lines.filter(l=>l.type!=='income' && l.p==='H')],
         ['Charges perso '+nM, c.lines.filter(l=>l.type!=='income' && l.p==='M')],
         ['Charges perso '+nG, c.lines.filter(l=>l.type!=='income' && l.p==='G')],
         ['Aides (partagées 50/50)', c.lines.filter(l=>l.type==='income' && l.p==='A')],
@@ -1138,6 +1140,7 @@ function renderPartageModal(){
       </div>
       <table class="pt-table">
         <tr><td>Sa part des charges familiales (${pct(c.pM)} de ${fmtMoney(c.CF,true)})</td><td>${sg(c.pM*c.CF)}</td></tr>
+        ${c.CH>0?`<tr><td>Moitié des dépenses 50/50 (${fmtMoney(c.CH,true)})</td><td>${sg(c.CH/2)}</td></tr>`:''}
         <tr><td>Ses charges perso payées sur ton compte</td><td>${sg(c.CM)}</td></tr>
         <tr><td>Moins sa moitié des aides (${fmtMoney(c.A,true)})</td><td>${sg(-c.A/2)}</td></tr>
         ${c.RM>0?`<tr><td>Moins ses revenus arrivés sur ton compte</td><td>${sg(-c.RM)}</td></tr>`:''}
@@ -1160,6 +1163,7 @@ function partageRecapText(){
   const pc = (Math.round(c.pM*1000)/10).toLocaleString('fr-FR');
   const L = [`Période du ${formatDateFr(c.ps)} au ${formatDateFr(c.pe)} ${c.pe.slice(0,4)}`, '',
     `Ta part des charges familiales (${pc} % de ${fmtMoney(c.CF,true)}) : ${fmtMoney(c.pM*c.CF,true)}`,
+    ...(c.CH>0 ? [`Moitié des dépenses 50/50 (${fmtMoney(c.CH,true)}) : ${fmtMoney(c.CH/2,true)}`] : []),
     `Tes charges perso payées sur mon compte : ${fmtMoney(c.CM,true)}`,
     `Moins ta moitié des aides : –${fmtMoney(c.A/2,true)}`];
   if(c.RM>0) L.push(`Moins tes revenus arrivés sur mon compte : –${fmtMoney(c.RM,true)}`);
